@@ -9,6 +9,7 @@ package com.juren233.hle.providers.qqmusic
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -55,7 +56,7 @@ class QQMusicSongMidResolverTest {
 
     @Test
     fun `numeric passthrough keeps song id without names`() {
-        val resolution = QQMusicSongMidResolver.resolve("97773", null, null)
+        val resolution = QQMusicSongMidResolver.resolve("97773", null, null, trustedId = true)
         assertEquals("97773", resolution.numericSongId)
         assertNull(resolution.songName)
         assertNull(resolution.singerName)
@@ -70,7 +71,7 @@ class QQMusicSongMidResolverTest {
         )
         assertEquals(
             "107762076",
-            QQMusicSongMidResolver.resolve("2305843009321456028", null, null).numericSongId,
+            QQMusicSongMidResolver.resolve("2305843009321456028", null, null, trustedId = true).numericSongId,
         )
         // 正常范围（≤32 位）的数字 ID 原样保留
         assertEquals("107762076", QQMusicSongMidResolver.sanitizeNumericSongId("107762076"))
@@ -216,5 +217,121 @@ class QQMusicSongMidResolverTest {
     @Test
     fun `search throttle detector treats malformed payload as retryable`() {
         assertTrue(QQMusicSongMidResolver.parseSearchThrottled("<html>gateway</html>"))
+    }
+
+    @Test
+    fun `search candidates collect every match of the winning round in order`() {
+        val raw = """
+            {"code":0,"music.search.SearchCgiService":{"code":0,"data":{"body":{"song":{"list":[
+              {"id":1,"mid":"a","name":"晴天","singer":[{"name":"周杰伦"}]},
+              {"id":2,"mid":"b","name":"晴天","singer":[{"name":"周杰伦"}]}
+            ]}}}}}
+        """.trimIndent()
+        val candidates = QQMusicSongMidResolver.parseSearchCandidates(raw, "晴天", "周杰伦")!!
+        assertEquals(listOf("1", "2"), candidates.map { it.numericSongId })
+        // 原单候选语义不变：取第一个
+        assertEquals("1", QQMusicSongMidResolver.parseSearchResponse(raw, "晴天", "周杰伦")!!.numericSongId)
+    }
+
+    // ---- 数字 ID 校验（issue #62：QQ 手机版本地歌 MEDIA_ID 是本地库数字 ID）----
+
+    private fun found(vararg ids: String) = QQMusicSongMidResolver.SearchOutcome.Found(
+        ids.map { QQMusicSongMidResolver.SongMidResolution(it, "分手快乐", "梁静茹") },
+    )
+
+    @Test
+    fun `trusted numeric id passes through without search`() {
+        var searches = 0
+        val resolution = QQMusicSongMidResolver.resolveNumericId("97773", null, null, true) { searches++; found("1") }
+        assertEquals("97773", resolution.numericSongId)
+        assertNull(resolution.songName)
+        assertEquals(0, searches)
+    }
+
+    @Test
+    fun `untrusted numeric id is confirmed when a candidate carries the same id`() {
+        val resolution = QQMusicSongMidResolver.resolveNumericId(
+            "4958007", "Without Me", "Eminem", false,
+        ) { found("105589678", "4958007") }
+        assertEquals("4958007", resolution.numericSongId)
+        assertEquals("分手快乐", resolution.songName)
+        assertEquals("梁静茹", resolution.singerName)
+    }
+
+    @Test
+    fun `untrusted numeric id is replaced by searched id for local library ids`() {
+        // issue #62：本地库数字 ID 与在线同曲候选 ID 不同 → 改用搜索结果，本地歌拿到正确在线词
+        val resolution = QQMusicSongMidResolver.resolveNumericId(
+            "267483012", "分手快乐", "梁静茹", false,
+        ) { found("97773") }
+        assertEquals("97773", resolution.numericSongId)
+        assertEquals("分手快乐", resolution.songName)
+    }
+
+    @Test
+    fun `untrusted numeric id without matching song throws and writes negative cache`() {
+        var searches = 0
+        val search = { searches++; QQMusicSongMidResolver.SearchOutcome.NotFound }
+        assertThrows(IllegalStateException::class.java) {
+            QQMusicSongMidResolver.resolveNumericId("987001", "冷门歌", "某人", false, search)
+        }
+        // 负缓存生效：第二次不再发起搜索，直接抛出
+        assertThrows(IllegalStateException::class.java) {
+            QQMusicSongMidResolver.resolveNumericId("987001", "冷门歌", "某人", false, search)
+        }
+        assertEquals(1, searches)
+    }
+
+    @Test
+    fun `untrusted numeric id falls back to passthrough when search throttles`() {
+        var searches = 0
+        val search = { searches++; QQMusicSongMidResolver.SearchOutcome.Throttled }
+        val first = QQMusicSongMidResolver.resolveNumericId("987002", "A Song", "B", false, search)
+        assertEquals("987002", first.numericSongId)
+        assertNull(first.songName)
+        // 放行不写正缓存：下次仍会重试校验
+        val second = QQMusicSongMidResolver.resolveNumericId("987002", "A Song", "B", false, search)
+        assertEquals("987002", second.numericSongId)
+        assertEquals(2, searches)
+    }
+
+    @Test
+    fun `untrusted numeric id falls back to passthrough when search fails`() {
+        val resolution = QQMusicSongMidResolver.resolveNumericId(
+            "987003", "A Song", "B", false,
+        ) { throw java.io.IOException("network down") }
+        assertEquals("987003", resolution.numericSongId)
+        assertNull(resolution.songName)
+    }
+
+    @Test
+    fun `verified numeric resolution is cached per song identity`() {
+        var searches = 0
+        val search = {
+            searches++
+            QQMusicSongMidResolver.SearchOutcome.Found(
+                listOf(QQMusicSongMidResolver.SongMidResolution("97773", "分手快乐", "梁静茹")),
+            )
+        }
+        val first = QQMusicSongMidResolver.resolveNumericId("987004", "分手快乐", "梁静茹", false, search)
+        val second = QQMusicSongMidResolver.resolveNumericId("987004", "分手快乐", "梁静茹", false, search)
+        assertEquals(first, second)
+        assertEquals(1, searches)
+        // 本地库数字 ID 可能被复用为另一首歌：不同标题/歌手组合不命中旧换算缓存
+        // （若误按裸 id 命中旧换算会直接返回 97773 而不抛异常）
+        assertThrows(IllegalStateException::class.java) {
+            QQMusicSongMidResolver.resolveNumericId("987004", "另一首", "别人", false) {
+                QQMusicSongMidResolver.SearchOutcome.NotFound
+            }
+        }
+    }
+
+    @Test
+    fun `untrusted numeric id strips flag bits before comparing with candidates`() {
+        // SDK 长整型 ID：先掩码高位标志位再与候选比较（掩码后与候选同 ID 即确认在线）
+        val resolution = QQMusicSongMidResolver.resolveNumericId(
+            "2305843009321456028", "虚拟", "陈粒", false,
+        ) { found("107762076") }
+        assertEquals("107762076", resolution.numericSongId)
     }
 }

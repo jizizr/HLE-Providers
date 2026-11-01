@@ -10,14 +10,20 @@ android {
         applicationId = "com.juren233.hle.providers.pack.qqmusic"
         minSdk = 33
         targetSdk = 37
-        versionCode = 30
-        versionName = "1.0.29"
+        versionCode = 31
+        versionName = "1.0.30"
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
         }
+    }
+
+    testOptions {
+        // 换算器阶段日志走 android.util.Log（release 可见）；JVM 单测走到日志路径时
+        // 以默认返回值放行，只测分支逻辑
+        unitTests.isReturnDefaultValues = true
     }
 
     buildFeatures {

@@ -551,7 +551,9 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                 // 发布永远排队，且无任何失败日志。以下阶段日志（release 可见、按
                 // 歌曲次数输出）用于在真机日志里直接定位卡住的阶段。
                 Log.i(TAG, "QQ 歌词任务开始: id=${track.id}, title=${track.title}")
-                val resolution = runCatching { QQMusicSongMidResolver.resolve(track.id, track.title, track.artist) }
+                val resolution = runCatching {
+                    QQMusicSongMidResolver.resolve(track.id, track.title, track.artist, track.idTrusted)
+                }
                     .onFailure { error ->
                         Log.w(TAG, "QQ 歌曲 ID 换算失败: id=${track.id}", error)
                         Log.i(TAG, "QQ 歌词任务结束(换算失败): id=${track.id}")
@@ -581,7 +583,11 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                             Log.i(TAG, "QQ 歌词任务结束(空歌词): id=${track.id}")
                             return@onSuccess
                         }
-                        writeCache(track.id, enriched)
+                        // 未校验的透传结果（来源不可信且无权威 name）没有身份证明，不落缓存，
+                        // 否则限流窗口内放行的内容会按 track.id 永久回放（issue #62）
+                        if (track.idTrusted || resolution.songName != null) {
+                            writeCache(track.id, enriched)
+                        }
                         synchronized(this@QQRuntime) {
                             if (activeLoadKey == loadKey) {
                                 val published = publish(song)
@@ -633,7 +639,28 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         private fun loadCached(track: QQMusicLyricTrack): Song? {
             val file = File(cacheDir, "${track.id}.json")
             if (!file.isFile) return null
-            return runCatching { toSong(track, QQPayload.fromJson(JSONObject(file.readText()))) }.getOrNull()
+            val payload = runCatching { QQPayload.fromJson(JSONObject(file.readText())) }.getOrNull()
+            if (payload == null) {
+                runCatching { file.delete() }
+                return null
+            }
+            if (!track.idTrusted &&
+                !QQMusicLyricCachePolicy.belongsToSession(
+                    payload.name, payload.singer, track.title, track.artist,
+                )
+            ) {
+                // 无法证明缓存属于当前曲目（数字 ID 盲透传时代的缓存不带权威 name，
+                // 含 issue #62 的错词缓存）：删除自愈，按 miss 重新走校验取词
+                runCatching { file.delete() }
+                    .onFailure { Log.w(TAG, "QQ 歌词缓存删除失败: id=${track.id}", it) }
+                Log.i(
+                    TAG,
+                    "QQ 歌词缓存身份不符已删除: id=${track.id}, cacheName=${payload.name}, " +
+                        "title=${track.title}, artist=${track.artist}",
+                )
+                return null
+            }
+            return runCatching { toSong(track, payload) }.getOrNull()
         }
 
         private fun writeCache(id: String, payload: QQPayload) {

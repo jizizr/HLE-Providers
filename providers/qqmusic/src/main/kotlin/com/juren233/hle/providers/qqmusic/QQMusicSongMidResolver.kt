@@ -14,8 +14,11 @@ import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * 小米音乐（com.miui.player）的歌词接口只接受数字歌曲 ID，歌词下载按数字 ID 进行，
- * 数字 ID（QQ 手机版/HD 的 MediaSession 上报值）原样透传。
+ * 小米音乐（com.miui.player）的歌词接口只接受数字歌曲 ID，歌词下载按数字 ID 进行。
+ * 数字 ID 只有来源可信（HD/MIUI 播放队列快照）时才透传；QQ 手机版的 MEDIA_ID 是会话
+ * 原值，本地歌曲时是本地库数字 ID 而非在线歌曲 ID（issue #62：本地库 ID 恰好命中另一首
+ * 在线歌的歌词，顶着会话标题发布并按 id 永久缓存），必须先经搜索校验（见
+ * resolveNumericId）。
  *
  * 4.44.0.9 真机证伪（2026-09-27）：小米音乐的 MediaSession MEDIA_ID 不是 QQ songmid
  * （三首不同歌曲的 MEDIA_ID 在单曲接口一律 code=0 且 data 为空数组），而系统媒体卡片
@@ -71,8 +74,8 @@ internal object QQMusicSongMidResolver {
     @Volatile
     private var lastSearchStartedAtMs = 0L
 
-    private sealed interface SearchOutcome {
-        data class Found(val resolution: SongMidResolution) : SearchOutcome
+    internal sealed interface SearchOutcome {
+        data class Found(val candidates: List<SongMidResolution>) : SearchOutcome
         data object NotFound : SearchOutcome
         data object Throttled : SearchOutcome
     }
@@ -93,8 +96,8 @@ internal object QQMusicSongMidResolver {
         return (value and 0xFFFF_FFFFL).toString()
     }
 
-    fun resolve(id: String, title: String?, artist: String?): SongMidResolution {
-        if (isNumericSongId(id)) return SongMidResolution(sanitizeNumericSongId(id), null, null)
+    fun resolve(id: String, title: String?, artist: String?, trustedId: Boolean = false): SongMidResolution {
+        if (isNumericSongId(id)) return resolveNumericId(id, title, artist, trustedId)
         resolved[id]?.let { return it }
         val failureKey = "$id|$title|$artist"
         failedAt[failureKey]?.let { failedAtMs ->
@@ -109,8 +112,8 @@ internal object QQMusicSongMidResolver {
             }
             throttledAt.remove(failureKey)
         }
-        val resolution = fetchSingleSong(id) ?: when (val search = fetchBySearch(id, title, artist)) {
-            is SearchOutcome.Found -> search.resolution
+        val resolution = fetchSingleSong(id) ?: when (val search = fetchBySearch(title, artist)) {
+            is SearchOutcome.Found -> search.candidates.first()
             SearchOutcome.Throttled -> {
                 throttledAt[failureKey] = elapsedRealtimeMs()
                 throw IllegalStateException("QQ 歌曲 ID 换算失败(搜索限流或节流跳过): mid=$id")
@@ -122,6 +125,61 @@ internal object QQMusicSongMidResolver {
         }
         resolved[id] = resolution
         Log.i(TAG, "QQ 歌曲 ID 已换算: mid=$id songId=${resolution.numericSongId}")
+        return resolution
+    }
+
+    /**
+     * 不可信数字 ID 的校验与换算。搜索命中同 ID 即确认在线歌；命中同曲但 ID 不同
+     * （本地库数字 ID 的典型特征，issue #62）改用搜索到的 ID 取词，本地歌也能拿到
+     * 正确的在线词；查无此歌不发布（与 songmid 换算路径同语义，负缓存 10 分钟）；
+     * 限流/网络异常放行透传且不写正缓存——在线歌不受限流窗口误伤，下次重试校验。
+     * 正/负缓存按 id|标题|歌手 组合键：本地库数字 ID 可能被复用，不能只按 id 记住换算。
+     */
+    internal fun resolveNumericId(
+        id: String,
+        title: String?,
+        artist: String?,
+        trustedId: Boolean,
+        search: () -> SearchOutcome = { fetchBySearch(title, artist) },
+    ): SongMidResolution {
+        val numericId = sanitizeNumericSongId(id)
+        if (trustedId) return SongMidResolution(numericId, null, null)
+        val failureKey = "$id|$title|$artist"
+        resolved[failureKey]?.let { return it }
+        failedAt[failureKey]?.let { failedAtMs ->
+            if (elapsedRealtimeMs() - failedAtMs < FAILED_RETRY_MS) {
+                throw IllegalStateException("QQ 歌曲 ID 校验失败(命中负缓存): id=$id")
+            }
+            failedAt.remove(failureKey)
+        }
+        val outcome = try {
+            search()
+        } catch (error: Exception) {
+            Log.w(TAG, "QQ 数字 ID 校验未完成(搜索异常), 放行透传: id=$id", error)
+            return SongMidResolution(numericId, null, null)
+        }
+        val candidates = when (outcome) {
+            is SearchOutcome.Found -> outcome.candidates
+            SearchOutcome.Throttled -> {
+                Log.w(TAG, "QQ 数字 ID 校验被限流跳过, 放行透传: id=$id")
+                return SongMidResolution(numericId, null, null)
+            }
+            SearchOutcome.NotFound -> {
+                failedAt[failureKey] = elapsedRealtimeMs()
+                Log.i(TAG, "QQ 数字 ID 校验未命中同曲, 不发布: id=$id, title=$title, artist=$artist")
+                throw IllegalStateException("QQ 歌曲 ID 校验失败(搜索无同曲): id=$id")
+            }
+        }
+        val resolution = candidates.firstOrNull { it.numericSongId == numericId }
+            ?: candidates.first().also {
+                Log.i(
+                    TAG,
+                    "QQ 数字 ID 校验: 会话 ID 非在线歌曲 ID, 改用搜索结果: " +
+                        "mediaId=$numericId -> songId=${it.numericSongId}, title=${it.songName}",
+                )
+            }
+        resolved[failureKey] = resolution
+        Log.i(TAG, "QQ 数字 ID 校验通过: id=$numericId -> songId=${resolution.numericSongId}")
         return resolution
     }
 
@@ -142,7 +200,7 @@ internal object QQMusicSongMidResolver {
         }
     }
 
-    private fun fetchBySearch(id: String, title: String?, artist: String?): SearchOutcome {
+    private fun fetchBySearch(title: String?, artist: String?): SearchOutcome {
         if (title.isNullOrBlank() || artist.isNullOrBlank()) return SearchOutcome.NotFound
         val now = elapsedRealtimeMs()
         if (now - lastSearchStartedAtMs < SEARCH_MIN_INTERVAL_MS) return SearchOutcome.Throttled
@@ -160,8 +218,9 @@ internal object QQMusicSongMidResolver {
             }
             when {
                 parseSearchThrottled(raw) -> SearchOutcome.Throttled
-                else -> parseSearchResponse(raw, title, artist)
-                    ?.let(SearchOutcome::Found)
+                else -> parseSearchCandidates(raw, title, artist)
+                    ?.takeIf(List<SongMidResolution>::isNotEmpty)
+                    ?.let { SearchOutcome.Found(it) }
                     ?: SearchOutcome.NotFound
             }
         } finally {
@@ -215,15 +274,21 @@ internal object QQMusicSongMidResolver {
         )
     }.getOrNull()
 
+    internal fun parseSearchResponse(raw: String, title: String, artist: String): SongMidResolution? =
+        parseSearchCandidates(raw, title, artist)?.firstOrNull()
+
     /**
      * 搜索兜底采纳「标题匹配 + 歌手精确相等」的候选（忽略大小写与空白差异）；
      * 标题匹配两轮扫描：先精确相等，再互相包含（小米音乐等端上会截断长标题，
      * 如 golden hour ⊂ In your golden hour），包含要求较短侧 ≥4 字符防误配。
+     * 精确轮命中的全部候选优先于包含轮（songmid 兜底取第一个；数字 ID 校验在
+     * 全部候选里优先取与会话同 ID 的条目，其余按序作为本地库 ID 的替换来源）。
      * 命中条目允许与输入 songmid 不同（同曲不同版本条目，歌词一致）。
      * musicu.fcg 网关的条目字段是 id/name（旧 client_search_cp 是 songid/songname），
      * 服务层与顶层各有一个 code，任一非 0 都视为失败。
      */
-    internal fun parseSearchResponse(raw: String, title: String, artist: String): SongMidResolution? = runCatching {
+    internal fun parseSearchCandidates(raw: String, title: String, artist: String): List<SongMidResolution>? =
+        runCatching<List<SongMidResolution>> {
         val root = org.json.JSONObject(raw)
         if (root.optInt("code", -1) != 0) return null
         val service = root.optJSONObject("music.search.SearchCgiService") ?: return null
@@ -239,6 +304,7 @@ internal object QQMusicSongMidResolver {
             .toSet()
         if (wantedTitle.isEmpty() || wantedArtistSegments.isEmpty()) return null
         for (allowContains in booleanArrayOf(false, true)) {
+            val matched = ArrayList<SongMidResolution>()
             for (index in 0 until songs.length()) {
                 val song = songs.getJSONObject(index)
                 val candidateTitle = normalizeForMatch(song.optString("name"))
@@ -261,14 +327,17 @@ internal object QQMusicSongMidResolver {
                 }
                 matchedSinger ?: continue
                 val songId = song.optLong("id", -1L).takeIf { it > 0L }?.toString() ?: continue
-                return SongMidResolution(
-                    numericSongId = songId,
-                    songName = song.optString("name").takeIf(String::isNotBlank),
-                    singerName = matchedSinger,
+                matched.add(
+                    SongMidResolution(
+                        numericSongId = songId,
+                        songName = song.optString("name").takeIf(String::isNotBlank),
+                        singerName = matchedSinger,
+                    ),
                 )
             }
+            if (matched.isNotEmpty()) return matched
         }
-        null
+        emptyList()
     }.getOrNull()
 
     internal fun normalizeForMatch(value: String): String =

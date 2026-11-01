@@ -20,6 +20,12 @@ internal data class QQMusicLyricTrack(
      * 严格匹配，不再依赖被污染的标题/歌手。
      */
     val sessionMediaId: String? = null,
+    /**
+     * id 是否已由应用内数据（HD/MIUI 播放队列快照的数字 ID）验证为在线歌曲 ID。
+     * false 时（QQ 手机版的 MEDIA_ID 原值）本地歌曲的 id 是本地库数字 ID，
+     * 换算器必须先经标题/歌手搜索校验才能用于取词（issue #62）。
+     */
+    val idTrusted: Boolean = false,
 )
 
 /** Keep songmid/numeric-ID upgrades on one lyric, but distinguish MIUI playback sessions. */
@@ -81,12 +87,13 @@ internal class QQMusicLyricTrackCoordinator(
             return mediaTrack?.let(::decide) ?: QQMusicLyricTrackDecision.Unchanged
         }
         val track = mediaTrack?.takeIf { sameIdentity(it, current) }
-            ?.copy(id = current.id)
+            ?.copy(id = current.id, idTrusted = true)
             ?: QQMusicLyricTrack(
                 id = current.id,
                 title = current.title,
                 artist = current.artist,
                 duration = 0L,
+                idTrusted = true,
             )
         return emit(track, track)
     }
@@ -95,7 +102,7 @@ internal class QQMusicLyricTrackCoordinator(
         val resolved = when (playerPackage) {
             QQMusicRuntimePlan.HD_PACKAGE -> queueSnapshot?.current
                 ?.takeIf { sameIdentity(track, it) }
-                ?.let { current -> track.copy(id = current.id) }
+                ?.let { current -> track.copy(id = current.id, idTrusted = true) }
             QQMusicRuntimePlan.MIUI_PACKAGE -> queueSnapshot?.current
                 ?.takeIf { it.id.toLongOrNull()?.let { id -> id > 0L } == true }
                 ?.let { current ->
@@ -109,6 +116,7 @@ internal class QQMusicLyricTrackCoordinator(
                         title = current.title.takeIf { normalize(it).isNotEmpty() } ?: track.title,
                         artist = current.artist.takeIf { normalize(it).isNotEmpty() } ?: track.artist,
                         sessionMediaId = track.sessionMediaId.takeIf { metadataMatchesCurrent },
+                        idTrusted = true,
                     )
                 }
                 ?: track

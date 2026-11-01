@@ -7,6 +7,7 @@
 package com.juren233.hle.providers.qqmusic
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -28,6 +29,8 @@ class QQMusicLyricTrackCoordinatorTest {
         assertEquals("451887939", decision.track.id)
         assertEquals("Spotlight (聚光灯)", decision.track.title)
         assertEquals(202_000L, decision.track.duration)
+        // 快照数字 ID 已被应用内数据验证，换算器可直接透传
+        assertTrue(decision.track.idTrusted)
     }
 
     @Test
@@ -137,6 +140,8 @@ class QQMusicLyricTrackCoordinatorTest {
         ) as QQMusicLyricTrackDecision.Load
 
         assertEquals("368304013", decision.track.id)
+        // 手机版 MEDIA_ID 原值未经应用内数据验证，换算器必须搜索校验（issue #62）
+        assertFalse(decision.track.idTrusted)
     }
 
     @Test
@@ -152,6 +157,7 @@ class QQMusicLyricTrackCoordinatorTest {
         assertEquals("this is what winter feels like", decision.track.title)
         assertEquals("JVKE", decision.track.artist)
         assertEquals(202_000L, decision.track.duration)
+        assertTrue(decision.track.idTrusted)
     }
 
     @Test
@@ -199,6 +205,8 @@ class QQMusicLyricTrackCoordinatorTest {
             track("003iXtVK2B6Zk6", "this is what winter feels like", "JVKE"),
         ) as QQMusicLyricTrackDecision.Load
         assertEquals("003iXtVK2B6Zk6", decision.track.id)
+        // 无快照可用：数字/歌曲 ID 均未获应用内验证，songmid 兜底换算自带标题校验
+        assertFalse(decision.track.idTrusted)
     }
 
     @Test
