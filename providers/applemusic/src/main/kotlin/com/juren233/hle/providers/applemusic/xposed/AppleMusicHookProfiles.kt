@@ -2650,8 +2650,10 @@ internal object AppleMusicHookProfiles {
      * Original 1614 DEX: U.<init>(Context,String,HashSet)V fills final ArrayList a with U$a
      * destinations built by U$a.<init>(J,String,String,String,String)V (size, id, title, package,
      * referrer); ShareLyricsActionSheetFragment$e.z(I,View,CollectionItemView)V handles taps; Q is
-     * the "creating" progress dialog (argument keys = Q.class.getName() + suffix); i1.apply(Object,Object)Object receives the rendered PNG as a
-     * mediaservices.utils.b holder (b()Z empty, a()Object value) and $e$a.accept(Object)V launches
+     * the "creating" progress dialog (argument keys = Q.class.getName() + suffix); i1.apply(Object,Object)Object receives two
+     * mediaservices.utils.b holders (b()Z empty, a()Object value): arg 0 the rendered lyric card PNG, arg 1 the story
+     * background PNG (j1.h zips m0 card + k0 "stickerBackground.png"; i1 puts them in the story Intent as
+     * interactive_asset_uri and the Intent data), and $e$a.accept(Object)V launches
      * the platform Intent. androidx FileProvider.d(Context,File,String)Uri is getUriForFile.
      */
     private fun verified7001614LyricsShareTargets(): Map<AppleMusicHookPoint, List<AppleMusicHookTarget>> {

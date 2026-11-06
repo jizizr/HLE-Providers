@@ -287,23 +287,32 @@ internal class AppleLyricsShareExportHooks(
         })
     }
 
-    /** Receives Apple's freshly rendered PNG on a worker thread, before any Intent is built. */
+    /**
+     * Receives Apple's freshly rendered PNGs on a worker thread, before any Intent is built.
+     * `i1.apply` combines two renders: arg 0 is the lyric card, arg 1 is the story background
+     * (`stickerBackground.png`, the same image Apple puts behind the card for Instagram stories).
+     */
     private fun installRenderedFileHook() {
         runtime.hookRegistrar.installHook(targets.rendered, after = { call, _ ->
             val current = activeSession()?.takeIf { !it.saved } ?: return@installHook
-            val source = call.args.firstOrNull() ?: return@installHook
-            // Apple's Optional-like holder: the empty check returns false when a file is present.
-            if (invoke(source, targets.resultEmptyMethod) as? Boolean != false) return@installHook
-            val file = invoke(source, targets.resultValueMethod) as? File ?: return@installHook
+            val file = renderedFile(call.args.firstOrNull()) ?: return@installHook
+            val backdrop = renderedFile(call.args.getOrNull(1))
             hit("rendered_image")
             current.saved = when (current.mode) {
-                Mode.SAVE -> exportComposed(current, file)
+                Mode.SAVE -> exportComposed(current, file, backdrop)
                 Mode.SHARE -> publishShare(current) { output ->
-                    AppleLyricsShareCardComposer.compose(file, current.songUrl, qrTitle(), qrSubtitle(), output) ||
-                        run { file.inputStream().use { it.copyTo(output) }; true }
+                    AppleLyricsShareCardComposer.compose(
+                        file, backdrop, current.songUrl, qrTitle(), qrSubtitle(), output,
+                    ) || run { file.inputStream().use { it.copyTo(output) }; true }
                 }
             }
         })
+    }
+
+    /** Apple's Optional-like holder: the empty check returns false when a file is present. */
+    private fun renderedFile(holder: Any?): File? {
+        if (holder == null || invoke(holder, targets.resultEmptyMethod) as? Boolean != false) return null
+        return invoke(holder, targets.resultValueMethod) as? File
     }
 
     private fun installRenderedIntentHook() {
@@ -418,11 +427,12 @@ internal class AppleLyricsShareExportHooks(
     }
 
     /** Composes straight into the MediaStore stream: one decode, one encode, no temp file. */
-    private fun exportComposed(current: Session, source: File): Boolean {
+    private fun exportComposed(current: Session, source: File, backdrop: File?): Boolean {
         val startedAt = SystemClock.elapsedRealtime()
         val saved = writeToGallery(current, "jpg", "image/jpeg") { output ->
             AppleLyricsShareCardComposer.compose(
                 source = source,
+                backdrop = backdrop,
                 songUrl = current.songUrl,
                 title = qrTitle(),
                 subtitle = qrSubtitle(),
@@ -430,7 +440,8 @@ internal class AppleLyricsShareExportHooks(
             )
         } ?: return exportRaw(current) { source.inputStream() }
         ProviderLogger.diagnostic(
-            "Apple Music 歌词图片已生成: ${SystemClock.elapsedRealtime() - startedAt}ms",
+            "Apple Music 歌词图片已生成: ${SystemClock.elapsedRealtime() - startedAt}ms, " +
+                "backdrop=${backdrop != null}",
         )
         return saved
     }
