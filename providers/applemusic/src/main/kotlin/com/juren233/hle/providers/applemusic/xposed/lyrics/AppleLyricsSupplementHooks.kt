@@ -477,8 +477,13 @@ internal class AppleLyricsSupplementHooks(
                 }
             }
 
+            // Apple Music 发布版把 androidx.lifecycle.Observer 混淆成了别的类名（1613 为 K），
+            // 按字面名加载必然失败；LiveData.observeForever 的参数类型才是实际的 Observer 接口。
             val observerClass = runCatching {
-                classLoader.loadClass("androidx.lifecycle.Observer")
+                resultLiveData.javaClass.methods.firstOrNull {
+                    it.name == "observeForever" && it.parameterTypes.size == 1 &&
+                        it.parameterTypes[0].isInterface
+                }?.parameterTypes?.get(0)
             }.getOrNull()
             if (observerClass == null) {
                 diagnoseNativeResult("Observer 类加载失败: id=$songId")
