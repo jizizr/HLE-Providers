@@ -163,6 +163,15 @@ internal enum class AppleMusicHookPoint {
     LISTEN_NOW_CUSTOM_IMAGE_VIEW,
     LISTEN_NOW_MEDIA_ENTITY,
     LISTEN_NOW_COLLECTION_ITEM_VIEW,
+    LYRICS_SHARE_DESTINATION_LIST,
+    LYRICS_SHARE_DESTINATION_ICON,
+    LYRICS_SHARE_DESTINATION_CLICK,
+    LYRICS_SHARE_PROGRESS_CREATE,
+    LYRICS_SHARE_PROGRESS_CREATE_VIEW,
+    LYRICS_SHARE_RENDERED_IMAGE,
+    LYRICS_SHARE_INTENT_CALLBACK,
+    LYRICS_SHARE_FILE_PROVIDER_OPEN,
+    LYRICS_SHARE_FILE_PROVIDER_QUERY,
 }
 
 internal enum class AppleMusicRuntimeMember {
@@ -439,6 +448,18 @@ internal enum class AppleMusicRuntimeMember {
     CUSTOM_TEXT_VIEW_FUTURE_RESOLVE_METHOD,
     IN_APP_CONTAINER_SET_TITLE_METHOD,
     IN_APP_CONTAINER_NOTIFY_CHANGE_METHOD,
+    LYRICS_SHARE_DESTINATION_LIST_CONSTRUCTOR,
+    LYRICS_SHARE_DESTINATION_LIST_FIELD,
+    LYRICS_SHARE_DESTINATION_ITEM_CLASS,
+    LYRICS_SHARE_DESTINATION_ITEM_CONSTRUCTOR,
+    LYRICS_SHARE_ITEM_ID_METHOD,
+    LYRICS_SHARE_ITEM_URL_METHOD,
+    LYRICS_SHARE_PROGRESS_ITEM_KEY_SUFFIX,
+    LYRICS_SHARE_PROGRESS_LYRICS_URL_KEY_SUFFIX,
+    LYRICS_SHARE_RESULT_CLASS,
+    LYRICS_SHARE_RESULT_EMPTY_METHOD,
+    LYRICS_SHARE_RESULT_VALUE_METHOD,
+    LYRICS_SHARE_FILE_PROVIDER_URI_METHOD,
 }
 
 internal data class AppleMusicHookTarget(
@@ -2620,6 +2641,128 @@ internal object AppleMusicHookProfiles {
             AppleMusicHookPoint.LYRICS_RECYCLER_ADAPTER to listOf(
                 lyricsAdapter(0),
                 lyricsAdapter(1),
+            ),
+        ) + verified7001614LyricsShareTargets()
+    }
+
+    /**
+     * Lyric share sheet "Save Image" / "Share Image" (1614 only; other versions skip the feature).
+     * Original 1614 DEX: U.<init>(Context,String,HashSet)V fills final ArrayList a with U$a
+     * destinations built by U$a.<init>(J,String,String,String,String)V (size, id, title, package,
+     * referrer); ShareLyricsActionSheetFragment$e.z(I,View,CollectionItemView)V handles taps; Q is
+     * the "creating" progress dialog (argument keys = Q.class.getName() + suffix); i1.apply(Object,Object)Object receives the rendered PNG as a
+     * mediaservices.utils.b holder (b()Z empty, a()Object value) and $e$a.accept(Object)V launches
+     * the platform Intent. androidx FileProvider.d(Context,File,String)Uri is getUriForFile.
+     */
+    private fun verified7001614LyricsShareTargets(): Map<AppleMusicHookPoint, List<AppleMusicHookTarget>> {
+        val actionSheet = "com.apple.android.music.common.actionsheet"
+        val lyricsSheet = "$actionSheet.lyrics.ShareLyricsActionSheetFragment"
+        val fileProvider = "androidx.core.content.FileProvider"
+        return mapOf(
+            AppleMusicHookPoint.LYRICS_SHARE_DESTINATION_LIST to listOf(
+                AppleMusicHookTarget(
+                    className = "$actionSheet.U",
+                    runtimeMemberNames = mapOf(
+                        AppleMusicRuntimeMember.LYRICS_SHARE_DESTINATION_LIST_CONSTRUCTOR to
+                            "android.content.Context,java.lang.String,java.util.HashSet",
+                        AppleMusicRuntimeMember.LYRICS_SHARE_DESTINATION_LIST_FIELD to "a",
+                        AppleMusicRuntimeMember.LYRICS_SHARE_DESTINATION_ITEM_CLASS to "$actionSheet.U\$a",
+                        AppleMusicRuntimeMember.LYRICS_SHARE_DESTINATION_ITEM_CONSTRUCTOR to
+                            "long,java.lang.String,java.lang.String,java.lang.String,java.lang.String",
+                    ),
+                ),
+            ),
+            AppleMusicHookPoint.LYRICS_SHARE_DESTINATION_ICON to listOf(
+                AppleMusicHookTarget(
+                    "$actionSheet.U\$a", "getIconDrawable", 0, emptyList(),
+                    "android.graphics.drawable.Drawable", false,
+                ),
+            ),
+            AppleMusicHookPoint.LYRICS_SHARE_DESTINATION_CLICK to listOf(
+                AppleMusicHookTarget(
+                    className = "$lyricsSheet\$e",
+                    methodName = "z",
+                    parameterCount = 3,
+                    parameterTypeNames = listOf(
+                        "int",
+                        "android.view.View",
+                        "com.apple.android.music.model.CollectionItemView",
+                    ),
+                    returnTypeName = "void",
+                    isStatic = false,
+                    runtimeMemberNames = mapOf(
+                        AppleMusicRuntimeMember.LYRICS_SHARE_ITEM_ID_METHOD to "getId",
+                        AppleMusicRuntimeMember.LYRICS_SHARE_ITEM_URL_METHOD to "getUrl",
+                    ),
+                ),
+            ),
+            AppleMusicHookPoint.LYRICS_SHARE_PROGRESS_CREATE to listOf(
+                AppleMusicHookTarget(
+                    className = "$actionSheet.Q",
+                    methodName = "onCreate",
+                    parameterCount = 1,
+                    parameterTypeNames = listOf("android.os.Bundle"),
+                    returnTypeName = "void",
+                    isStatic = false,
+                    runtimeMemberNames = mapOf(
+                        // Q builds its argument keys as Q.class.getName() + suffix.
+                        AppleMusicRuntimeMember.LYRICS_SHARE_PROGRESS_ITEM_KEY_SUFFIX to
+                            ".BUNDLE_KEY_SHARE_ITEM",
+                        AppleMusicRuntimeMember.LYRICS_SHARE_PROGRESS_LYRICS_URL_KEY_SUFFIX to
+                            ".BUNDLE_KEY_SHARE_LYRICS_URL",
+                    ),
+                ),
+            ),
+            AppleMusicHookPoint.LYRICS_SHARE_PROGRESS_CREATE_VIEW to listOf(
+                AppleMusicHookTarget(
+                    "$actionSheet.Q", "onCreateView", 3,
+                    listOf("android.view.LayoutInflater", "android.view.ViewGroup", "android.os.Bundle"),
+                    "android.view.View", false,
+                ),
+            ),
+            AppleMusicHookPoint.LYRICS_SHARE_RENDERED_IMAGE to listOf(
+                AppleMusicHookTarget(
+                    className = "com.apple.android.music.utils.i1",
+                    methodName = "apply",
+                    parameterCount = 2,
+                    parameterTypeNames = listOf("java.lang.Object", "java.lang.Object"),
+                    returnTypeName = "java.lang.Object",
+                    isStatic = false,
+                    runtimeMemberNames = mapOf(
+                        AppleMusicRuntimeMember.LYRICS_SHARE_RESULT_CLASS to
+                            "com.apple.android.mediaservices.utils.b",
+                        AppleMusicRuntimeMember.LYRICS_SHARE_RESULT_EMPTY_METHOD to "b",
+                        AppleMusicRuntimeMember.LYRICS_SHARE_RESULT_VALUE_METHOD to "a",
+                    ),
+                ),
+            ),
+            AppleMusicHookPoint.LYRICS_SHARE_INTENT_CALLBACK to listOf(
+                AppleMusicHookTarget(
+                    "$lyricsSheet\$e\$a", "accept", 1, listOf("java.lang.Object"), "void", false,
+                ),
+            ),
+            AppleMusicHookPoint.LYRICS_SHARE_FILE_PROVIDER_OPEN to listOf(
+                AppleMusicHookTarget(
+                    className = fileProvider,
+                    methodName = "openFile",
+                    parameterCount = 2,
+                    parameterTypeNames = listOf("android.net.Uri", "java.lang.String"),
+                    returnTypeName = "android.os.ParcelFileDescriptor",
+                    isStatic = false,
+                    runtimeMemberNames = mapOf(
+                        AppleMusicRuntimeMember.LYRICS_SHARE_FILE_PROVIDER_URI_METHOD to "d",
+                    ),
+                ),
+            ),
+            AppleMusicHookPoint.LYRICS_SHARE_FILE_PROVIDER_QUERY to listOf(
+                AppleMusicHookTarget(
+                    fileProvider, "query", 5,
+                    listOf(
+                        "android.net.Uri", "[Ljava.lang.String;", "java.lang.String",
+                        "[Ljava.lang.String;", "java.lang.String",
+                    ),
+                    "android.database.Cursor", false,
+                ),
             ),
         )
     }
@@ -5299,6 +5442,17 @@ internal class AppleMusicHookResolver(
             AppleMusicHookPoint.IN_APP_CONTAINER_ALBUM_CLASS -> true
 
             AppleMusicHookPoint.MEDIA_API_REPOSITORY_HOLDER_CLASS -> true
+
+            // Exact 1614 descriptors (types, return, static) already pin these down.
+            AppleMusicHookPoint.LYRICS_SHARE_DESTINATION_LIST,
+            AppleMusicHookPoint.LYRICS_SHARE_DESTINATION_ICON,
+            AppleMusicHookPoint.LYRICS_SHARE_DESTINATION_CLICK,
+            AppleMusicHookPoint.LYRICS_SHARE_PROGRESS_CREATE,
+            AppleMusicHookPoint.LYRICS_SHARE_PROGRESS_CREATE_VIEW,
+            AppleMusicHookPoint.LYRICS_SHARE_RENDERED_IMAGE,
+            AppleMusicHookPoint.LYRICS_SHARE_INTENT_CALLBACK,
+            AppleMusicHookPoint.LYRICS_SHARE_FILE_PROVIDER_OPEN,
+            AppleMusicHookPoint.LYRICS_SHARE_FILE_PROVIDER_QUERY -> true
 
             AppleMusicHookPoint.EPOXY_FINAL_BIND -> {
                 val parameters = method.parameterTypes

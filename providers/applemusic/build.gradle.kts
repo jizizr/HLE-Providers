@@ -38,6 +38,7 @@ android {
 }
 
 dependencies {
+    implementation("com.google.zxing:core:3.5.3")
     compileOnly("io.github.proify.lyricon:provider:0.1.70")
     compileOnly("org.jetbrains.kotlin:kotlin-stdlib:2.3.21")
     compileOnly("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")

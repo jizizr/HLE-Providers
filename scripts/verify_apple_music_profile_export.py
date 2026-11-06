@@ -528,6 +528,49 @@ def verify_profile(ctx, profile):
     require(any(f.type_descriptor == 'Lcom/apple/android/music/listennow/ListenNowEpoxyController$R;'
                 for c in lineage(ctx, model['className']) for f in c.fields),
             f'{model["className"]}: not the ListenNow callback-bearing model')
+    # Lyric share export: constructors, fields and member chains outside the method targets.
+    if points.get('LYRICS_SHARE_DESTINATION_LIST'):
+        def constructor(owner, params):
+            nonlocal member_checks
+            member_checks += 1
+            cls = ctx.find_class(owner)
+            wanted = [to_dex_type(p) for p in params.split(',')]
+            found = [m for m in (cls.methods if cls else [])
+                     if m.name == '<init>' and list(m.param_types) == wanted]
+            require(len(found) == 1, f'{owner}.<init>({params}): {len(found)} matches')
+
+        share = one('LYRICS_SHARE_DESTINATION_LIST')
+        names = share['runtimeMemberNames']
+        constructor(share['className'], names['LYRICS_SHARE_DESTINATION_LIST_CONSTRUCTOR'])
+        field(share['className'], names['LYRICS_SHARE_DESTINATION_LIST_FIELD'], 'java.util.ArrayList')
+        constructor(names['LYRICS_SHARE_DESTINATION_ITEM_CLASS'], names['LYRICS_SHARE_DESTINATION_ITEM_CONSTRUCTOR'])
+        require(one('LYRICS_SHARE_DESTINATION_ICON')['className'] == names['LYRICS_SHARE_DESTINATION_ITEM_CLASS'],
+                'LYRICS_SHARE_DESTINATION_ICON: icon owner is not the destination item class')
+
+        click = one('LYRICS_SHARE_DESTINATION_CLICK')
+        item = click['parameterTypeNames'][2]
+        method(item, click['runtimeMemberNames']['LYRICS_SHARE_ITEM_ID_METHOD'], [], 'java.lang.String', False)
+        method(item, click['runtimeMemberNames']['LYRICS_SHARE_ITEM_URL_METHOD'], [], 'java.lang.String', False)
+
+        progress = one('LYRICS_SHARE_PROGRESS_CREATE')
+        progress_cls = ctx.find_class(progress['className'])
+        progress_strings = set()
+        for m in (progress_cls.methods if progress_cls else []):
+            if m.dex is not None:
+                progress_strings |= m.dex.code_references(m)['strings']
+        for key in ('LYRICS_SHARE_PROGRESS_ITEM_KEY_SUFFIX', 'LYRICS_SHARE_PROGRESS_LYRICS_URL_KEY_SUFFIX'):
+            require(progress['runtimeMemberNames'][key] in progress_strings,
+                    f'{progress["className"]}: bundle key suffix {key} not referenced')
+
+        rendered = one('LYRICS_SHARE_RENDERED_IMAGE')['runtimeMemberNames']
+        holder = rendered['LYRICS_SHARE_RESULT_CLASS']
+        method(holder, rendered['LYRICS_SHARE_RESULT_EMPTY_METHOD'], [], 'boolean', False)
+        method(holder, rendered['LYRICS_SHARE_RESULT_VALUE_METHOD'], [], 'java.lang.Object', False)
+
+        provider = one('LYRICS_SHARE_FILE_PROVIDER_OPEN')
+        method(provider['className'], provider['runtimeMemberNames']['LYRICS_SHARE_FILE_PROVIDER_URI_METHOD'],
+               ['android.content.Context', 'java.io.File', 'java.lang.String'], 'android.net.Uri', True)
+
     semantic_checks = 0
     if profile['id'] in ('am-7.0.0-beta-1607', 'am-7.0.0-beta-1609',
                          'am-7.0.0-beta-1611', 'am-7.0.0-beta-1613',

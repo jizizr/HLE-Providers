@@ -67,6 +67,7 @@ import com.juren233.hle.providers.applemusic.xposed.hooks.AppleFrameworkMetadata
 import com.juren233.hle.providers.applemusic.xposed.hooks.ApplePlaybackHooks
 import com.juren233.hle.providers.applemusic.xposed.hooks.FunctionalAppleMusicHookModule
 import com.juren233.hle.providers.applemusic.xposed.lyrics.AppleOnlineSourceMenuHooks
+import com.juren233.hle.providers.applemusic.xposed.lyrics.AppleLyricsShareExportHooks
 import com.juren233.hle.providers.applemusic.xposed.internal.ThreadLocalReentryGuard
 import com.juren233.hle.providers.applemusic.xposed.internal.ThreadLocalStack
 import com.juren233.hle.providers.applemusic.xposed.internal.WeakIdentityMap
@@ -338,6 +339,15 @@ internal fun AppleMusicProviderOrchestrator.hookModules() = listOf(
     FunctionalAppleMusicHookModule(
         "hookAppleLyricsSourceMenu",
         installer = { lyricsPlayback.onlineSourceMenuHooks.installSourceMenu() },
+    ),
+    FunctionalAppleMusicHookModule(
+        "hookAppleLyricsShareExport",
+        installer = {
+            AppleLyricsShareExportHooks(
+                runtime = runtime,
+                preferences = { catalogLanguage.contentUiLanguagePrefs },
+            ).install()
+        },
     ),
     FunctionalAppleMusicHookModule(
         "hookAppleMissingLyricsSupplement",

@@ -70,7 +70,7 @@ class AppleMusic653ProfileRegressionTest {
                     AppleMusicHookPoint.ARTIST_COMPOSE_ENTITY_RELATIONSHIPS,
                     AppleMusicHookPoint.ARTIST_COMPOSE_RELATIONSHIP_ENTITIES,
                     AppleMusicHookPoint.ARTIST_COMPOSE_FRAGMENT_RESUMED,
-                )
+                ) || point.name.startsWith("LYRICS_SHARE_") // 1614-only lyric image export
             ) assertTrue(targets(point).isEmpty())
             else assertTrue("Missing exact 1599 group: $point", targets(point).isNotEmpty())
         }

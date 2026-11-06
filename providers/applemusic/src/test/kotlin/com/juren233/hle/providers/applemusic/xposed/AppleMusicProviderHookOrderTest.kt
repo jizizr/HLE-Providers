@@ -120,6 +120,7 @@ class AppleMusicProviderHookOrderTest {
             "hookAppleLyricsUiDiagnostics",
             "hookAppleLyricsBindingDiagnostics",
             "hookAppleLyricsSourceMenu",
+            "hookAppleLyricsShareExport",
             "hookAppleMissingLyricsSupplement",
             "hookLyricsNetworkRequest",
             "hookLyricsCookies",

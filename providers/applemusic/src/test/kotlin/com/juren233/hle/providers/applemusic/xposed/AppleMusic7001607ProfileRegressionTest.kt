@@ -28,7 +28,9 @@ class AppleMusic7001607ProfileRegressionTest {
             val current = targets(point)
             assertEquals("Lost targets: $point", old.size, current.size)
             if (point !in setOf(AppleMusicHookPoint.SETTINGS_DATA_CATEGORY_BUILD,
-                    AppleMusicHookPoint.SETTINGS_CELLULAR_SIM_CHECK)) {
+                    AppleMusicHookPoint.SETTINGS_CELLULAR_SIM_CHECK) &&
+                !point.name.startsWith("LYRICS_SHARE_") // 1614-only lyric image export
+            ) {
                 assertTrue("Missing 1607 group: $point", current.isNotEmpty())
             }
             old.zip(current).forEach { (before, after) ->
