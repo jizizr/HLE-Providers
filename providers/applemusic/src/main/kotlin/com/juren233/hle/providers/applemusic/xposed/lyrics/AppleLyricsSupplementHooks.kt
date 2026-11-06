@@ -451,11 +451,20 @@ internal class AppleLyricsSupplementHooks(
                     AppleMusicRuntimeMember.LYRICS_VIEW_MODEL_RESULT_GETTER
                 ),
             )
-        }.getOrNull() ?: return
+        }.getOrNull()
+        if (resultLiveData == null) {
+            diagnoseNativeResult("结果 LiveData 获取失败: id=$songId, vm=${System.identityHashCode(viewModel)}")
+            return
+        }
 
         val initialValue = runCatching {
             AppleReflection.call(resultLiveData, "getValue")
         }.getOrNull()
+        diagnoseNativeResult(
+            "观察器排程: id=$songId, vm=${System.identityHashCode(viewModel)}, " +
+                "liveData=${System.identityHashCode(resultLiveData)}, " +
+                "initial=${initialValue?.javaClass?.name}@${initialValue?.let(System::identityHashCode)}"
+        )
 
         mainHandler.post {
             // 清理上一个 Observer，避免泄露或重复监听
@@ -470,7 +479,11 @@ internal class AppleLyricsSupplementHooks(
 
             val observerClass = runCatching {
                 classLoader.loadClass("androidx.lifecycle.Observer")
-            }.getOrNull() ?: return@post
+            }.getOrNull()
+            if (observerClass == null) {
+                diagnoseNativeResult("Observer 类加载失败: id=$songId")
+                return@post
+            }
 
             val observer = java.lang.reflect.Proxy.newProxyInstance(
                 classLoader,
@@ -478,6 +491,13 @@ internal class AppleLyricsSupplementHooks(
             ) { _, method, args ->
                 if (method.name == "onChanged") {
                     val result = args?.firstOrNull()
+                    diagnoseNativeResult(
+                        "onChanged: id=$songId, liveData=${System.identityHashCode(resultLiveData)}, " +
+                            "result=${result?.javaClass?.name}@${result?.let(System::identityHashCode)}, " +
+                            "sameAsInitial=${result === initialValue}, " +
+                            "first=${runCatching { AppleReflection.call(result!!, "getFirst") }.getOrNull()?.javaClass?.name}, " +
+                            "second=${runCatching { AppleReflection.call(result!!, "getSecond") }.getOrNull()?.javaClass?.name}"
+                    )
                     if (result !== initialValue) {
                         handleNativeLyricsResultEmitted(songId, result)
                     }
@@ -488,20 +508,34 @@ internal class AppleLyricsSupplementHooks(
             activeLyricsResultObserver = Pair(WeakReference(resultLiveData), observer)
             runCatching {
                 AppleReflection.call(resultLiveData, "observeForever", observer)
+            }.onSuccess {
+                diagnoseNativeResult(
+                    "观察器已安装: id=$songId, liveData=${System.identityHashCode(resultLiveData)}"
+                )
             }.onFailure {
                 ProviderLogger.debug("Apple Music 原生歌词 LiveData 观察者安装失败: ${it.message}")
             }
         }
     }
 
+    private fun diagnoseNativeResult(message: String) {
+        if (AppleProviderEnvironment.diagnosticsEnabled) {
+            ProviderLogger.info("[NativeResultDiag] $message")
+        }
+    }
+
     private fun handleNativeLyricsResultEmitted(songId: String, result: Any?) {
-        if (result == null) return
+        if (result == null) {
+            diagnoseNativeResult("结果为空被忽略: id=$songId")
+            return
+        }
         val pointer = runCatching {
             AppleReflection.call(result, "getFirst")
         }.getOrNull()
 
         // 如果是本模块注入的三方补充模型，绝不能当作 Apple 原生歌词结果处理
         if (pointer != null && missingLyricsSupplement().isSupplementPointer(pointer)) {
+            diagnoseNativeResult("补充模型指针被忽略: id=$songId")
             return
         }
 
@@ -536,6 +570,7 @@ internal class AppleLyricsSupplementHooks(
     }
 
     internal fun cleanupLyricsResultObserver() {
+        diagnoseNativeResult("观察器被清理")
         mainHandler.post {
             activeLyricsResultObserver?.let { (liveDataRef, oldObserver) ->
                 val oldLiveData = liveDataRef.get()
