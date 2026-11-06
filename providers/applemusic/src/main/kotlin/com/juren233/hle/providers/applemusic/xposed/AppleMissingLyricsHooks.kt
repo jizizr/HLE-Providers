@@ -402,10 +402,28 @@ internal class AppleMissingLyricsHooks(
         mainHandler.postDelayed(
             {
                 if (!takeoverRechecks.claim(songId, targetAt)) return@postDelayed
+                reportNativeLyricsAbsentAfterWait(songId)
                 maybeActivateSupplement(songId, trigger = "resolution_recheck")
             },
             delayMs.coerceAtLeast(1L),
         )
+    }
+
+    /**
+     * 原生歌词请求已发出但等满有界超时仍没有结果（纯音乐等 Apple 不构建歌词的曲目没有任何完成回调），
+     * 或歌词页要求呈现后 Apple 始终没发起请求：本 Provider 这一侧已经没有歌词，上报歌词确认缺失。
+     * 与补充功能开关无关；有三方补充内容或已确认原生歌词时不报。核心再结合自己的在线兜底判定。
+     */
+    private fun reportNativeLyricsAbsentAfterWait(songId: String) {
+        val decision = takeoverDecision(songId)
+        if (!decision.allowed) return
+        if (decision.reason != "native_request_timeout" && decision.reason != "native_request_not_observed") return
+        if (store.hasContent(songId) || hasKnownNativeLyrics(songId)) return
+        if (PlaybackManager.republishAsLyricsUnavailable(songId)) {
+            ProviderLogger.info(
+                "Apple Music 原生歌词等待结束仍无歌词，上报歌词确认缺失: id=$songId, reason=${decision.reason}"
+            )
+        }
     }
 
     internal fun maybeActivateSupplement(songId: String, trigger: String): Boolean {
