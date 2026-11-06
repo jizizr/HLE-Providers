@@ -493,7 +493,14 @@ internal class AppleLyricsSupplementHooks(
             val observer = java.lang.reflect.Proxy.newProxyInstance(
                 classLoader,
                 arrayOf(observerClass),
-            ) { _, method, args ->
+            ) { proxy, method, args ->
+                // LiveData 内部用 equals/hashCode 管理观察者；代理对 Object 方法必须按身份语义返回，
+                // 返回 null 会在拆箱时 NPE，导致第二次安装与移除观察者都失败。
+                when (method.name) {
+                    "equals" -> return@newProxyInstance proxy === args?.firstOrNull()
+                    "hashCode" -> return@newProxyInstance System.identityHashCode(proxy)
+                    "toString" -> return@newProxyInstance "AppleLyricsResultObserver@${System.identityHashCode(proxy)}"
+                }
                 if (method.name == "onChanged") {
                     val result = args?.firstOrNull()
                     diagnoseNativeResult(
@@ -518,7 +525,8 @@ internal class AppleLyricsSupplementHooks(
                     "观察器已安装: id=$songId, liveData=${System.identityHashCode(resultLiveData)}"
                 )
             }.onFailure {
-                ProviderLogger.debug("Apple Music 原生歌词 LiveData 观察者安装失败: ${it.message}")
+                val cause = (it as? java.lang.reflect.InvocationTargetException)?.targetException ?: it
+                ProviderLogger.debug("Apple Music 原生歌词 LiveData 观察者安装失败: $cause")
             }
         }
     }
