@@ -5,7 +5,7 @@
   "displayName": "网易云音乐",
   "versionName": "1.0.26",
   "versionCode": 29,
-  "minCoreVersionCode": 140139,
+  "minCoreVersionCode": 240050,
   "entryClass": "com.juren233.hle.providers.netease.NeteasePluginEntry",
   "providerPackageName": "com.juren233.hyperlyricsenhanced.provider.netease",
   "targetPackages": [

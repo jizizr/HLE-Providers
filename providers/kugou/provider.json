@@ -5,7 +5,7 @@
   "displayName": "酷狗音乐",
   "versionName": "1.0.18",
   "versionCode": 19,
-  "minCoreVersionCode": 140077,
+  "minCoreVersionCode": 240050,
   "entryClass": "com.juren233.hle.providers.kugou.KuGouPluginEntry",
   "providerPackageName": "com.juren233.hyperlyricsenhanced.provider.kugou",
   "targetPackages": [

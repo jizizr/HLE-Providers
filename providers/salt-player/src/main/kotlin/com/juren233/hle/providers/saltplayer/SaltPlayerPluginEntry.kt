@@ -30,6 +30,8 @@ import java.util.concurrent.atomic.AtomicLong
 
 object SaltPlayerPluginEntry : OfficialProviderPlugin {
     private const val TAG = "HLEProvider/SaltPlayer"
+    /** 与核心仓库 LyricMetadataKeys.LYRICS_UNAVAILABLE 取值一致。 */
+    private const val LYRICS_UNAVAILABLE_METADATA_KEY = "hleLyricsUnavailable"
     private const val TARGET_PACKAGE = "com.salt.music"
     private const val PROVIDER_PACKAGE =
         "com.juren233.hyperlyricsenhanced.provider.salt-player"
@@ -233,15 +235,22 @@ object SaltPlayerPluginEntry : OfficialProviderPlugin {
         @Synchronized
         private fun currentMetadata(): SaltPlayerTrackMetadata = metadata
 
-        private fun publishCurrent() {
+        /** @param lookupFinished 本地文件歌词已读取完毕；此时仍没有歌词文档，就在占位歌曲上打「歌词确认缺失」标记。 */
+        private fun publishCurrent(lookupFinished: Boolean = false) {
             if (Looper.myLooper() != Looper.getMainLooper()) {
-                mainHandler.post(::publishCurrent)
+                mainHandler.post { publishCurrent(lookupFinished) }
                 return
             }
             val song = synchronized(this) {
                 val currentDocument = document
                 val mapped = if (currentDocument == null) {
-                    SaltPlayerLyricsMapper.placeholder(metadata)
+                    SaltPlayerLyricsMapper.placeholder(metadata).also { placeholder ->
+                        if (lookupFinished) {
+                            placeholder.metadata = io.github.proify.lyricon.lyric.model.LyricMetadata(
+                                mapOf(LYRICS_UNAVAILABLE_METADATA_KEY to "true"),
+                            )
+                        }
+                    }
                 } else {
                     SaltPlayerLyricsMapper.map(currentDocument, metadata)
                 }
@@ -310,7 +319,7 @@ object SaltPlayerPluginEntry : OfficialProviderPlugin {
                                 "lines=${result?.document?.lines?.size ?: 0}",
                         )
                     }
-                    publishCurrent()
+                    publishCurrent(lookupFinished = true)
                 }
             }
         }

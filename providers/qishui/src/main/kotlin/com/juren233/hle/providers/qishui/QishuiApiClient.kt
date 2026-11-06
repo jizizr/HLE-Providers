@@ -95,6 +95,12 @@ internal object QishuiApiClient {
         }
         if (fallback.isSuccess) return fallback.getOrThrow()
 
+        // 两条路径都是「服务端明确答复了没有歌词」：这是确定的结果，不是网络故障。
+        if (primary.exceptionOrNull() is QishuiNoLyricsException &&
+            fallback.exceptionOrNull() is QishuiNoLyricsException
+        ) {
+            throw QishuiNoLyricsException("汽水歌词 PC API 与官方分享页均答复没有歌词: trackId=$trackId")
+        }
         val failure = IllegalStateException(
             "汽水歌词 PC API 与官方分享页均不可用: trackId=$trackId; " +
                 "fallback=${fallback.exceptionOrNull()?.message}",
@@ -107,7 +113,7 @@ internal object QishuiApiClient {
     internal fun parseApiBody(trackId: String, body: String): QishuiLyricPayload {
         check(body.isNotBlank()) { "汽水歌词 PC API 返回空响应体" }
         return parseResponse(trackId, JSONObject(body))
-            ?: error("汽水歌词 PC API 响应不包含有效 lyric")
+            ?: throw QishuiNoLyricsException("汽水歌词 PC API 响应不包含有效 lyric")
     }
 
     internal fun parseSharePage(trackId: String, html: String): QishuiLyricPayload {
@@ -125,7 +131,7 @@ internal object QishuiApiClient {
             ?: error("汽水歌词官方分享页缺少 lyrics 数据")
         val durationMs = sharePageDurationMs(option)
         val timeline = parseShareTimeline(lyrics.optJSONArray("sentences"), durationMs)
-        check(timeline.isNotEmpty()) { "汽水歌词官方分享页不包含有效歌词" }
+        if (timeline.isEmpty()) throw QishuiNoLyricsException("汽水歌词官方分享页不包含有效歌词")
         return QishuiLyricPayload(
             trackId = trackId,
             type = lyrics.optString("lyricType").ifBlank { "lrc" },
@@ -378,3 +384,6 @@ internal object QishuiApiClient {
     private fun inferType(content: String): String =
         if (Regex("""^\[\d+,\d+]""").containsMatchIn(content.trimStart())) "krc" else "lrc"
 }
+
+/** 服务端已正常答复、但答复里没有歌词（区别于网络失败、解析失败等无法确定的错误）。 */
+internal class QishuiNoLyricsException(message: String) : IllegalStateException(message)

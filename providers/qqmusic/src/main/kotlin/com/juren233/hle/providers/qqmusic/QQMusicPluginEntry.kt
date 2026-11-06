@@ -63,6 +63,8 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
      * 包名+mediaId 身份匹配，绕开车载歌词对标题/歌手的污染。
      */
     private const val SESSION_MEDIA_ID_METADATA_KEY = "hleSessionMediaId"
+    /** 与核心仓库 LyricMetadataKeys.LYRICS_UNAVAILABLE 取值一致。 */
+    private const val LYRICS_UNAVAILABLE_METADATA_KEY = "hleLyricsUnavailable"
     private val installed = AtomicBoolean(false)
 
     @Volatile
@@ -559,7 +561,10 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                         Log.i(TAG, "QQ 歌词任务结束(换算失败): id=${track.id}")
                     }
                     .getOrNull()
-                    ?: return@execute
+                    ?: run {
+                        publishUnavailable(track, loadKey)
+                        return@execute
+                    }
                 Log.i(TAG, "QQ 换算完成: id=${track.id}, songId=${resolution.numericSongId}")
                 runCatching { QQClient.fetch(resolution.numericSongId) }
                     .onSuccess { payload ->
@@ -581,6 +586,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                                     "songId=${resolution.numericSongId}",
                             )
                             Log.i(TAG, "QQ 歌词任务结束(空歌词): id=${track.id}")
+                            publishUnavailable(track, loadKey)
                             return@onSuccess
                         }
                         // 未校验的透传结果（来源不可信且无权威 name）没有身份证明，不落缓存，
@@ -609,6 +615,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                     .onFailure { error ->
                         Log.w(TAG, "QQ 歌词下载失败: id=${track.id} songId=${resolution.numericSongId}", error)
                         Log.i(TAG, "QQ 歌词任务结束(下载失败): id=${track.id}")
+                        publishUnavailable(track, loadKey)
                     }
             }
         }
@@ -634,6 +641,22 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             name = track.title
             artist = track.artist
             duration = track.duration
+        }
+
+        /** 本 Provider 没有重试：换算失败、下载失败、歌词为空都是最终结果，在占位歌曲上打「歌词确认缺失」标记。 */
+        private fun publishUnavailable(track: QQMusicLyricTrack, loadKey: String) {
+            synchronized(this) {
+                if (activeLoadKey != loadKey) return
+                publish(placeholder(track).apply {
+                    metadata = io.github.proify.lyricon.lyric.model.LyricMetadata(
+                        buildMap {
+                            track.sessionMediaId?.takeIf(String::isNotBlank)
+                                ?.let { put(SESSION_MEDIA_ID_METADATA_KEY, it) }
+                            put(LYRICS_UNAVAILABLE_METADATA_KEY, "true")
+                        },
+                    )
+                })
+            }
         }
 
         private fun loadCached(track: QQMusicLyricTrack): Song? {

@@ -40,6 +40,8 @@ import java.util.concurrent.atomic.AtomicLong
 
 object KuGouPluginEntry : OfficialProviderPlugin {
     private const val TAG = "HLEProvider/KuGou"
+    /** 与核心仓库 LyricMetadataKeys.LYRICS_UNAVAILABLE 取值一致。 */
+    private const val LYRICS_UNAVAILABLE_METADATA_KEY = "hleLyricsUnavailable"
     private const val FULL_PACKAGE = "com.kugou.android"
     private const val LITE_PACKAGE = "com.kugou.android.lite"
     private const val FULL_SUPPORT_PROCESS = "$FULL_PACKAGE.support"
@@ -300,6 +302,7 @@ object KuGouPluginEntry : OfficialProviderPlugin {
                             "mediaId=${requestTrack.mediaId != null}",
                     )
                 }
+                publishUnavailable(requestGeneration, requestTrack)
                 return
             }
             if (!isCurrent(requestGeneration, requestTrack)) return
@@ -311,7 +314,10 @@ object KuGouPluginEntry : OfficialProviderPlugin {
             var primaryParsed: List<ParsedLine>? = null
             for (candidate in candidates.take(MAX_SEARCH_CANDIDATES)) {
                 if (!isCurrent(requestGeneration, requestTrack)) return
-                val parsed = resolveLyrics(requestGeneration, candidate, requestTrack) ?: return
+                val parsed = resolveLyrics(requestGeneration, candidate, requestTrack) ?: run {
+                    if (primaryParsed == null) publishUnavailable(requestGeneration, requestTrack)
+                    return
+                }
                 if (parsed.isEmpty()) continue
                 if (hasTranslation(parsed)) {
                     publishSearchLyrics(candidate, parsed, requestTrack, requestGeneration)
@@ -340,6 +346,7 @@ object KuGouPluginEntry : OfficialProviderPlugin {
                                 .joinToString { it.downloadId },
                     )
                 }
+                publishUnavailable(requestGeneration, requestTrack)
                 return
             }
             publishSearchLyrics(fallbackCandidate, fallbackParsed, requestTrack, requestGeneration)
@@ -611,6 +618,19 @@ object KuGouPluginEntry : OfficialProviderPlugin {
             name = track.title
             artist = track.artist
             duration = track.durationMs
+        }
+
+        /** 搜索失败、未匹配、无可解析时间轴都是本 Provider 的最终结果：在占位歌曲上打「歌词确认缺失」标记。 */
+        private fun publishUnavailable(requestGeneration: Long, requestTrack: KuGouTrackMetadata) {
+            if (Thread.currentThread().isInterrupted) return
+            if (!isCurrent(requestGeneration, requestTrack)) return
+            // 本地歌词文件源已拥有这首歌时，它的结果优先，不能判为缺失。
+            if (KuGouLyricFilePolicy.ownsTrack(fileSourceIdentity, requestTrack.identity)) return
+            publish(placeholder(requestTrack).apply {
+                metadata = io.github.proify.lyricon.lyric.model.LyricMetadata(
+                    mapOf(LYRICS_UNAVAILABLE_METADATA_KEY to "true"),
+                )
+            })
         }
 
         private fun toSong(track: KuGouTrackMetadata, lines: List<ParsedLine>): Song = Song().apply {

@@ -33,6 +33,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 object SpotifyPluginEntry : OfficialProviderPlugin {
     private const val TAG = "HLEProvider/Spotify"
+    /** 与核心仓库 LyricMetadataKeys.LYRICS_UNAVAILABLE 取值一致。 */
+    private const val LYRICS_UNAVAILABLE_METADATA_KEY = "hleLyricsUnavailable"
     private const val TARGET_PACKAGE = "com.spotify.music"
     private const val PROVIDER_PACKAGE =
         "com.juren233.hyperlyricsenhanced.provider.spotify"
@@ -452,6 +454,8 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                 val payload = SpotifyLyricsPayloadExtractor.extract(trackUri, result)
                 if (payload == null) {
                     Log.w(TAG, "Spotify 主动歌词成功值解析失败: track=$trackUri")
+                    // 主动请求只有一次机会，解析不出歌词即最终结果。
+                    publishLyricsUnavailable(trackUri)
                 } else {
                     Log.i(
                         TAG,
@@ -462,6 +466,7 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
             },
             onFailure = { trackUri, error ->
                 Log.w(TAG, "Spotify 主动歌词请求失败: track=$trackUri", error)
+                publishLyricsUnavailable(trackUri)
             },
             onScheduled = { trackUri, delayMs ->
                 if (BuildConfig.DEBUG) {
@@ -718,6 +723,27 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                         "syllables=${lines.sumOf { it.words.size }}",
                 )
             }
+        }
+
+        /** 主动取词已结束且当前曲目没有歌词时，在占位歌曲上打「歌词确认缺失」标记。 */
+        private fun publishLyricsUnavailable(trackUri: String) {
+            val track = currentTrack ?: return
+            if (SpotifyTrackIdentity.requestUri(track.mediaId) != trackUri) return
+            if (lastPublishedSongKey?.startsWith("lyrics:") == true) return
+            val id = SpotifyTrackIdentity.candidates(track.mediaId).firstOrNull()
+                ?: "spotify:${track.title.orEmpty()}:${track.artist.orEmpty()}"
+            val songKey = "unavailable:$id"
+            if (songKey == lastPublishedSongKey) return
+            publishSong(Song().apply {
+                this.id = id
+                name = track.title
+                artist = track.artist
+                duration = track.durationMs.coerceAtLeast(0L)
+                metadata = io.github.proify.lyricon.lyric.model.LyricMetadata(
+                    mapOf(LYRICS_UNAVAILABLE_METADATA_KEY to "true"),
+                )
+            })
+            lastPublishedSongKey = songKey
         }
 
         private fun publishPlaceholder(track: SpotifyTrackMetadata) {

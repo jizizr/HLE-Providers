@@ -5,7 +5,7 @@
   "displayName": "Apple Music",
   "versionName": "1.0.20",
   "versionCode": 21,
-  "minCoreVersionCode": 240004,
+  "minCoreVersionCode": 240050,
   "entryClass": "com.juren233.hle.providers.applemusic.AppleMusicPluginEntry",
   "providerPackageName": "com.juren233.hyperlyricsenhanced.provider.applemusic",
   "targetPackages": [

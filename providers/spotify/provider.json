@@ -5,7 +5,7 @@
   "displayName": "Spotify",
   "versionName": "1.0.18",
   "versionCode": 19,
-  "minCoreVersionCode": 151009,
+  "minCoreVersionCode": 240050,
   "entryClass": "com.juren233.hle.providers.spotify.SpotifyPluginEntry",
   "providerPackageName": "com.juren233.hyperlyricsenhanced.provider.spotify",
   "targetPackages": [
