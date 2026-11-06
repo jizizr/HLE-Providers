@@ -10,8 +10,8 @@ android {
         applicationId = "com.juren233.hle.providers.pack.qqmusic"
         minSdk = 33
         targetSdk = 37
-        versionCode = 31
-        versionName = "1.0.30"
+        versionCode = 32
+        versionName = "1.0.31"
     }
 
     buildTypes {
