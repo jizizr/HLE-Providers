@@ -34,7 +34,7 @@ class AppleMusic7001614ProfileRegressionTest {
 
     @Test
     fun `lyrics share export targets exist only in the verified 1614 profile`() {
-        assertEquals(9, lyricsSharePoints.size)
+        assertEquals(8, lyricsSharePoints.size)
         lyricsSharePoints.forEach { point ->
             assertEquals("1614 $point", 1, AppleMusicHookProfiles.exactTargets(version, point).size)
             assertTrue("1613 $point", AppleMusicHookProfiles.exactTargets(previous, point).isEmpty())
@@ -53,6 +53,26 @@ class AppleMusic7001614ProfileRegressionTest {
             "d",
             target(AppleMusicHookPoint.LYRICS_SHARE_FILE_PROVIDER_OPEN)
                 .runtimeMemberName(AppleMusicRuntimeMember.LYRICS_SHARE_FILE_PROVIDER_URI_METHOD),
+        )
+    }
+
+    /**
+     * The result rewrite answers `i1.apply` with an empty `mediaservices.utils.b` holder so the
+     * progress dialog closes without launching its Snapchat-shaped platform Intent. That only
+     * works if the holder's no-arg constructor is registered (DEX-verified: `b.<init>()V` is
+     * `b(null)`, i.e. an empty holder).
+     */
+    @Test
+    fun `the result holder no-arg constructor is registered for the empty-result rewrite`() {
+        val rendered = target(AppleMusicHookPoint.LYRICS_SHARE_RENDERED_IMAGE)
+        assertEquals("com.apple.android.music.utils.i1", rendered.className)
+        assertEquals(
+            "com.apple.android.mediaservices.utils.b",
+            rendered.runtimeMemberName(AppleMusicRuntimeMember.LYRICS_SHARE_RESULT_CLASS),
+        )
+        assertEquals(
+            "",
+            rendered.runtimeMemberName(AppleMusicRuntimeMember.LYRICS_SHARE_RESULT_EMPTY_CONSTRUCTOR),
         )
     }
 

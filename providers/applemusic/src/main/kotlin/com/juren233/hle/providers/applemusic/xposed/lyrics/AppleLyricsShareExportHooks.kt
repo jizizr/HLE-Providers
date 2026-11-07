@@ -6,7 +6,6 @@
 
 package com.juren233.hle.providers.applemusic.xposed.lyrics
 
-import android.app.Activity
 import android.content.ClipData
 import android.content.ContentValues
 import android.content.Context
@@ -45,7 +44,8 @@ import java.util.concurrent.atomic.AtomicReference
 /**
  * Adds "Save Image" and "Share Image" destinations to Apple Music's lyric share sheet. Apple
  * renders the card through its own pipeline (j1.h → i1.apply); we wrap it into a poster with a
- * song QR code and skip Apple's platform Intent.
+ * song QR code, then answer i1.apply with an empty holder so the progress dialog closes without
+ * launching the platform Intent it built (Snapchat-shaped even for our injected destinations).
  *
  * - Save writes the poster to Pictures/HyperLyrics.
  * - Share never touches the gallery and opens the chooser at the tap. Apple keeps rendering in the
@@ -85,7 +85,7 @@ internal class AppleLyricsShareExportHooks(
         val rendered: Method,
         val resultEmptyMethod: String,
         val resultValueMethod: String,
-        val intentCallback: Method,
+        val emptyResultConstructor: Constructor<*>,
         val providerOpen: Method,
         val providerQuery: Method,
         val fileUriMethod: Method,
@@ -138,8 +138,6 @@ internal class AppleLyricsShareExportHooks(
             installLyricsDestinationClickHook()
             installShareProgressHooks()
             installRenderedFileHook()
-            installRenderedIntentHook()
-            installActivityIntentFallbackHook()
             installShareFileGateHooks()
             ProviderLogger.info("Apple Music 歌词图片导出 Hook 已安装")
         }.onFailure { error ->
@@ -193,7 +191,12 @@ internal class AppleLyricsShareExportHooks(
             rendered = rendered.method,
             resultEmptyMethod = rendered.target.runtimeMemberName(AppleMusicRuntimeMember.LYRICS_SHARE_RESULT_EMPTY_METHOD),
             resultValueMethod = rendered.target.runtimeMemberName(AppleMusicRuntimeMember.LYRICS_SHARE_RESULT_VALUE_METHOD),
-            intentCallback = method(AppleMusicHookPoint.LYRICS_SHARE_INTENT_CALLBACK).method,
+            emptyResultConstructor = constructor(
+                runtime.classLoader.loadClass(
+                    rendered.target.runtimeMemberName(AppleMusicRuntimeMember.LYRICS_SHARE_RESULT_CLASS),
+                ),
+                rendered.target.runtimeMemberName(AppleMusicRuntimeMember.LYRICS_SHARE_RESULT_EMPTY_CONSTRUCTOR),
+            ),
             providerOpen = providerOpen.method,
             providerQuery = method(AppleMusicHookPoint.LYRICS_SHARE_FILE_PROVIDER_QUERY).method,
             fileUriMethod = providerOpen.method.declaringClass.getDeclaredMethod(
@@ -205,9 +208,9 @@ internal class AppleLyricsShareExportHooks(
         )
     }
 
-    /** Profile constructors are declared as comma-separated binary type names. */
+    /** Profile constructors are declared as comma-separated binary type names; "" is the no-arg constructor. */
     private fun constructor(owner: Class<*>, parameterTypeNames: String): Constructor<*> {
-        val wanted = parameterTypeNames.split(',').map(String::trim)
+        val wanted = parameterTypeNames.split(',').map(String::trim).filter(String::isNotEmpty)
         return owner.declaredConstructors.single { candidate ->
             candidate.parameterTypes.map(Class<*>::getName) == wanted
         }.apply { isAccessible = true }
@@ -288,63 +291,43 @@ internal class AppleLyricsShareExportHooks(
     }
 
     /**
-     * Receives Apple's freshly rendered PNGs on a worker thread, before any Intent is built.
+     * Receives Apple's freshly rendered PNGs on a worker thread and rewrites the result holder.
      * `i1.apply` combines two renders: arg 0 is the lyric card, arg 1 is the story background
      * (`stickerBackground.png`, the same image Apple puts behind the card for Instagram stories).
+     * While an export session is active its holder is replaced with an empty one, so the progress
+     * dialog's observer never launches the platform Intent via startActivityForResult.
      */
     private fun installRenderedFileHook() {
-        runtime.hookRegistrar.installHook(targets.rendered, after = { call, _ ->
-            val current = activeSession()?.takeIf { !it.saved } ?: return@installHook
-            val file = renderedFile(call.args.firstOrNull()) ?: return@installHook
-            val backdrop = renderedFile(call.args.getOrNull(1))
-            hit("rendered_image")
-            current.saved = when (current.mode) {
-                Mode.SAVE -> exportComposed(current, file, backdrop)
-                Mode.SHARE -> publishShare(current) { output ->
-                    AppleLyricsShareCardComposer.compose(
-                        file, backdrop, current.songUrl, qrTitle(), qrSubtitle(), output,
-                    ) || run { file.inputStream().use { it.copyTo(output) }; true }
+        runtime.hookRegistrar.installResultOverrideHook(targets.rendered) { call, result ->
+            val current = activeSession()
+            val file = renderedFile(call.args.firstOrNull())
+            val decision = AppleLyricsShareResultGate.decide(
+                sessionActive = current != null,
+                alreadySaved = current?.saved == true,
+                hasRenderedFile = file != null,
+            )
+            if (decision.compose && current != null && file != null) {
+                hit("rendered_image")
+                val backdrop = renderedFile(call.args.getOrNull(1))
+                current.saved = when (current.mode) {
+                    Mode.SAVE -> exportComposed(current, file, backdrop)
+                    Mode.SHARE -> publishShare(current) { output ->
+                        AppleLyricsShareCardComposer.compose(
+                            file, backdrop, current.songUrl, qrTitle(), qrSubtitle(), output,
+                        ) || run { file.inputStream().use { it.copyTo(output) }; true }
+                    }
                 }
             }
-        })
+            if (!decision.swallowIntent) return@installResultOverrideHook result
+            // If the empty holder cannot be built, keep Apple's result rather than null it out.
+            runCatching { targets.emptyResultConstructor.newInstance() }.getOrNull() ?: result
+        }
     }
 
     /** Apple's Optional-like holder: the empty check returns false when a file is present. */
     private fun renderedFile(holder: Any?): File? {
         if (holder == null || invoke(holder, targets.resultEmptyMethod) as? Boolean != false) return null
         return invoke(holder, targets.resultValueMethod) as? File
-    }
-
-    private fun installRenderedIntentHook() {
-        runtime.hookRegistrar.installConditionalVoidSkipHook(targets.intentCallback) { call ->
-            interceptPlatformIntent(call.args.firstOrNull() as? Intent).also { if (it) hit("intent_callback") }
-        }
-    }
-
-    /** Apple may bypass the Rx callback and launch the rendered Intent directly. */
-    private fun installActivityIntentFallbackHook() {
-        val startActivity = Activity::class.java.getDeclaredMethod("startActivity", Intent::class.java)
-        runtime.hookRegistrar.installConditionalVoidSkipHook(startActivity) { call ->
-            // Cheap null check first: this hook sees every Activity launch in Apple Music.
-            if (session.get() == null) return@installConditionalVoidSkipHook false
-            interceptPlatformIntent(call.args.firstOrNull() as? Intent).also { if (it) hit("activity_fallback") }
-        }
-    }
-
-    /** Returns true when Apple's platform Intent must be skipped. */
-    private fun interceptPlatformIntent(intent: Intent?): Boolean {
-        val current = activeSession() ?: return false
-        // Only Apple's own image-share Intent is ever swallowed, never unrelated launches.
-        val source = intent?.let(::renderedImageUri) ?: return false
-        if (!replaceSession(current, null)) return false
-        if (current.saved) return true
-        // Fallback path: the file hook missed, so hand over Apple's image as-is.
-        if (current.mode == Mode.SHARE) {
-            return publishShare(current) { output ->
-                runtime.application.contentResolver.openInputStream(source)?.use { it.copyTo(output) } != null
-            }
-        }
-        return exportRaw(current) { runtime.application.contentResolver.openInputStream(source) }
     }
 
     private fun itemId(item: Any?): String? = item?.let { invoke(it, targets.itemIdMethod) as? String }
@@ -355,25 +338,6 @@ internal class AppleLyricsShareExportHooks(
             runCatching { target.javaClass.getMethod(name) }.getOrNull()
         } ?: return null
         return runCatching { method.invoke(target) }.getOrNull()
-    }
-
-    private fun renderedImageUri(shareIntent: Intent): Uri? {
-        if (shareIntent.action == Intent.ACTION_CHOOSER) {
-            return shareIntent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
-                ?.let(::renderedImageUri)
-        }
-        val supported = when (shareIntent.action) {
-            INSTAGRAM_ACTION, FACEBOOK_ACTION -> true
-            Intent.ACTION_SEND -> shareIntent.`package` == SNAPCHAT_PACKAGE
-            Intent.ACTION_VIEW -> shareIntent.`package` == WHATSAPP_PACKAGE &&
-                shareIntent.getStringExtra("share_type") == WHATSAPP_STATUS
-            else -> false
-        }
-        if (!supported) return null
-        return shareIntent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
-            ?: shareIntent.getParcelableExtra("interactive_asset_uri", Uri::class.java)
-            ?: shareIntent.getParcelableExtra("foreground_media", Uri::class.java)
-            ?: shareIntent.data?.takeIf { it.scheme == "content" }
     }
 
     /** Runs on the tap: the chooser opens before Apple has even started rendering. */
@@ -533,11 +497,6 @@ internal class AppleLyricsShareExportHooks(
         const val MODULE_PACKAGE = "com.juren233.hyperlyricsenhanced"
         const val ALBUM_NAME = "HyperLyrics"
         const val INSTAGRAM_PACKAGE = "com.instagram.android"
-        const val INSTAGRAM_ACTION = "com.instagram.share.ADD_TO_STORY"
-        const val FACEBOOK_ACTION = "com.facebook.stories.ADD_TO_STORY"
-        const val SNAPCHAT_PACKAGE = "com.snapchat.android"
-        const val WHATSAPP_PACKAGE = "com.whatsapp"
-        const val WHATSAPP_STATUS = "SHARE_TO_STATUS"
         const val SESSION_TIMEOUT_MS = 30_000L
         const val SHARE_READ_WAIT_MS = 15_000L
     }

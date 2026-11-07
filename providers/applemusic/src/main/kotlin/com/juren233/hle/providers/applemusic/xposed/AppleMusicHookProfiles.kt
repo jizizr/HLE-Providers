@@ -169,7 +169,6 @@ internal enum class AppleMusicHookPoint {
     LYRICS_SHARE_PROGRESS_CREATE,
     LYRICS_SHARE_PROGRESS_CREATE_VIEW,
     LYRICS_SHARE_RENDERED_IMAGE,
-    LYRICS_SHARE_INTENT_CALLBACK,
     LYRICS_SHARE_FILE_PROVIDER_OPEN,
     LYRICS_SHARE_FILE_PROVIDER_QUERY,
 }
@@ -457,6 +456,7 @@ internal enum class AppleMusicRuntimeMember {
     LYRICS_SHARE_PROGRESS_ITEM_KEY_SUFFIX,
     LYRICS_SHARE_PROGRESS_LYRICS_URL_KEY_SUFFIX,
     LYRICS_SHARE_RESULT_CLASS,
+    LYRICS_SHARE_RESULT_EMPTY_CONSTRUCTOR,
     LYRICS_SHARE_RESULT_EMPTY_METHOD,
     LYRICS_SHARE_RESULT_VALUE_METHOD,
     LYRICS_SHARE_FILE_PROVIDER_URI_METHOD,
@@ -2651,10 +2651,11 @@ internal object AppleMusicHookProfiles {
      * destinations built by U$a.<init>(J,String,String,String,String)V (size, id, title, package,
      * referrer); ShareLyricsActionSheetFragment$e.z(I,View,CollectionItemView)V handles taps; Q is
      * the "creating" progress dialog (argument keys = Q.class.getName() + suffix); i1.apply(Object,Object)Object receives two
-     * mediaservices.utils.b holders (b()Z empty, a()Object value): arg 0 the rendered lyric card PNG, arg 1 the story
-     * background PNG (j1.h zips m0 card + k0 "stickerBackground.png"; i1 puts them in the story Intent as
-     * interactive_asset_uri and the Intent data), and $e$a.accept(Object)V launches
-     * the platform Intent. androidx FileProvider.d(Context,File,String)Uri is getUriForFile.
+     * mediaservices.utils.b holders (b()Z empty, a()Object value, <init>()V empty holder): arg 0 the rendered lyric
+     * card PNG, arg 1 the story background PNG (j1.h zips m0 card + k0 "stickerBackground.png"; i1 puts them in the
+     * story Intent as interactive_asset_uri and the Intent data). Q's observer takes the returned holder's Intent and
+     * launches it with startActivityForResult — an empty holder (b.<init>()V) closes the dialog without launching.
+     * androidx FileProvider.d(Context,File,String)Uri is getUriForFile.
      */
     private fun verified7001614LyricsShareTargets(): Map<AppleMusicHookPoint, List<AppleMusicHookTarget>> {
         val actionSheet = "com.apple.android.music.common.actionsheet"
@@ -2733,14 +2734,11 @@ internal object AppleMusicHookProfiles {
                     runtimeMemberNames = mapOf(
                         AppleMusicRuntimeMember.LYRICS_SHARE_RESULT_CLASS to
                             "com.apple.android.mediaservices.utils.b",
+                        // No-arg constructor; DEX-verified as equivalent to b(null), i.e. empty.
+                        AppleMusicRuntimeMember.LYRICS_SHARE_RESULT_EMPTY_CONSTRUCTOR to "",
                         AppleMusicRuntimeMember.LYRICS_SHARE_RESULT_EMPTY_METHOD to "b",
                         AppleMusicRuntimeMember.LYRICS_SHARE_RESULT_VALUE_METHOD to "a",
                     ),
-                ),
-            ),
-            AppleMusicHookPoint.LYRICS_SHARE_INTENT_CALLBACK to listOf(
-                AppleMusicHookTarget(
-                    "$lyricsSheet\$e\$a", "accept", 1, listOf("java.lang.Object"), "void", false,
                 ),
             ),
             AppleMusicHookPoint.LYRICS_SHARE_FILE_PROVIDER_OPEN to listOf(
@@ -5452,7 +5450,6 @@ internal class AppleMusicHookResolver(
             AppleMusicHookPoint.LYRICS_SHARE_PROGRESS_CREATE,
             AppleMusicHookPoint.LYRICS_SHARE_PROGRESS_CREATE_VIEW,
             AppleMusicHookPoint.LYRICS_SHARE_RENDERED_IMAGE,
-            AppleMusicHookPoint.LYRICS_SHARE_INTENT_CALLBACK,
             AppleMusicHookPoint.LYRICS_SHARE_FILE_PROVIDER_OPEN,
             AppleMusicHookPoint.LYRICS_SHARE_FILE_PROVIDER_QUERY -> true
 

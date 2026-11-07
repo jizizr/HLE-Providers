@@ -534,7 +534,8 @@ def verify_profile(ctx, profile):
             nonlocal member_checks
             member_checks += 1
             cls = ctx.find_class(owner)
-            wanted = [to_dex_type(p) for p in params.split(',')]
+            # An empty params string is the no-arg constructor.
+            wanted = [to_dex_type(p) for p in params.split(',') if p]
             found = [m for m in (cls.methods if cls else [])
                      if m.name == '<init>' and list(m.param_types) == wanted]
             require(len(found) == 1, f'{owner}.<init>({params}): {len(found)} matches')
@@ -566,6 +567,8 @@ def verify_profile(ctx, profile):
         holder = rendered['LYRICS_SHARE_RESULT_CLASS']
         method(holder, rendered['LYRICS_SHARE_RESULT_EMPTY_METHOD'], [], 'boolean', False)
         method(holder, rendered['LYRICS_SHARE_RESULT_VALUE_METHOD'], [], 'java.lang.Object', False)
+        # The empty-result rewrite instantiates the holder with its no-arg constructor.
+        constructor(holder, rendered['LYRICS_SHARE_RESULT_EMPTY_CONSTRUCTOR'])
 
         provider = one('LYRICS_SHARE_FILE_PROVIDER_OPEN')
         method(provider['className'], provider['runtimeMemberNames']['LYRICS_SHARE_FILE_PROVIDER_URI_METHOD'],
