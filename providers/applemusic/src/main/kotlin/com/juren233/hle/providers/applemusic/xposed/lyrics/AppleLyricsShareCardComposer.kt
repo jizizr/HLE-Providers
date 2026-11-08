@@ -21,132 +21,96 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
+import com.juren233.hle.providers.applemusic.xposed.ProviderLogger
+import com.juren233.hyperlyricsenhanced.common.color.ColorExtractor
+import com.juren233.hyperlyricsenhanced.contract.AppleLyricsSharePoster
 import java.io.File
+import java.io.FileDescriptor
 import java.io.OutputStream
-import kotlin.math.roundToInt
 
 /**
- * Wraps Apple's rendered lyric card into a poster: Apple's own story background behind the card,
- * a soft shadow and a footer whose QR code points at the song. Every size derives from the card
- * width so the result keeps its proportions across Apple's render densities.
+ * Wraps Apple's rendered lyric card into a poster: a background behind the card, a soft shadow
+ * and, optionally, a footer whose QR code points at the song. Geometry and colours come from
+ * [AppleLyricsSharePoster], shared with the core's background preview.
  *
- * The background is the image Apple renders for the Instagram/Facebook story share (the lyrics
- * background layer drawn from the artwork); when it is unavailable the poster falls back to a
- * flat colour taken from the card.
+ * The background is one of [Background]: an image (Apple's own story background, i.e. the lyrics
+ * background drawn from the artwork, or the user's prepared image) cover-cropped to the poster,
+ * the artwork's darkened dominant colour, or a flat colour.
  */
 internal object AppleLyricsShareCardComposer {
-    /** Pure layout in pixels; kept separate from drawing so proportions stay unit-testable. */
-    internal data class Layout(
-        val width: Int,
-        val height: Int,
-        val padding: Int,
-        val cardLeft: Int,
-        val cardTop: Int,
-        val footerTop: Int,
-        val qrTile: Int,
-        val qrInset: Int,
-        val qrLeft: Int,
-        val qrTop: Int,
-        val textLeft: Int,
-        val textRight: Int,
-        val titleSize: Float,
-        val subtitleSize: Float,
-        val tileRadius: Float,
-        val shadowRadius: Float,
+    sealed interface Background {
+        /** Short name for diagnostics (class names are obfuscated in release Packs). */
+        val label: String
+
+        /** Cover-cropped image; [bitmap] is recycled by [compose]. */
+        class Image(val bitmap: Bitmap, override val label: String) : Background
+
+        /**
+         * The artwork's dominant colour, darkened. Taken from the artwork thumbnail inside
+         * Apple's card; [storyBackground] (Apple's blurred artwork) is used when the thumbnail
+         * cannot be found.
+         */
+        class CoverColor(val storyBackground: File?) : Background {
+            override val label = "cover_color"
+        }
+
+        /** A flat colour; alpha is ignored so JPEG never sees transparency. */
+        data class Flat(val color: Int) : Background {
+            override val label = "custom_color"
+        }
+    }
+
+    fun decode(file: File): Bitmap? = BitmapFactory.decodeFile(
+        file.absolutePath,
+        BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 },
     )
 
-    internal fun layout(cardWidth: Int, cardHeight: Int, withQr: Boolean): Layout {
-        val unit = cardWidth / 100f
-        val padding = (unit * 6f).roundToInt().coerceAtLeast(16)
-        val qrTile = if (withQr) (unit * 22f).roundToInt() else 0
-        val qrInset = (unit * 1.6f).roundToInt().coerceAtLeast(6)
-        val footerTop = padding + cardHeight + if (withQr) (unit * 5f).roundToInt() else 0
-        val height = if (withQr) footerTop + qrTile + padding else footerTop + padding
-        val width = cardWidth + padding * 2
-        val qrLeft = width - padding - qrTile
-        return Layout(
-            width = width,
-            height = height,
-            padding = padding,
-            cardLeft = padding,
-            cardTop = padding,
-            footerTop = footerTop,
-            qrTile = qrTile,
-            qrInset = qrInset,
-            qrLeft = qrLeft,
-            qrTop = footerTop,
-            textLeft = padding + (unit * 1.5f).roundToInt(),
-            textRight = qrLeft - (unit * 5f).roundToInt(),
-            titleSize = unit * 4.6f,
-            subtitleSize = unit * 3.3f,
-            tileRadius = unit * 3f,
-            shadowRadius = unit * 3.5f,
-        )
-    }
-
-    /** Light card colours get a deeper backdrop; returns (background, foreground). */
-    internal fun palette(sampled: Int): Pair<Int, Int> {
-        val background = blend(sampled, BLACK, 0.42f)
-        return background to foregroundFor(background)
-    }
-
-    /** White or near-black, whichever has the higher WCAG contrast on [background]. */
-    internal fun foregroundFor(background: Int): Int {
-        val backgroundLuminance = relativeLuminance(background)
-        val onWhite = 1.05 / (backgroundLuminance + 0.05)
-        val onDark = (backgroundLuminance + 0.05) / (relativeLuminance(DARK_TEXT) + 0.05)
-        return if (onWhite >= onDark) WHITE else DARK_TEXT
-    }
-
-    /** Source window, in source pixels, that fills a destination of the given size. */
-    internal data class Crop(val left: Int, val top: Int, val right: Int, val bottom: Int)
-
-    /** Centred "cover" crop: scales uniformly to fill the destination and trims the overflow. */
-    internal fun coverCrop(srcWidth: Int, srcHeight: Int, dstWidth: Int, dstHeight: Int): Crop {
-        if (srcWidth <= 0 || srcHeight <= 0 || dstWidth <= 0 || dstHeight <= 0) {
-            return Crop(0, 0, srcWidth, srcHeight)
-        }
-        // Source is wider than the destination when srcW / srcH > dstW / dstH.
-        return if (srcWidth.toLong() * dstHeight > dstWidth.toLong() * srcHeight) {
-            val width = (srcHeight.toLong() * dstWidth / dstHeight).toInt().coerceIn(1, srcWidth)
-            val left = (srcWidth - width) / 2
-            Crop(left, 0, left + width, srcHeight)
-        } else {
-            val height = (srcWidth.toLong() * dstHeight / dstWidth).toInt().coerceIn(1, srcHeight)
-            val top = (srcHeight - height) / 2
-            Crop(0, top, srcWidth, top + height)
-        }
-    }
+    fun decode(descriptor: FileDescriptor): Bitmap? = BitmapFactory.decodeFileDescriptor(
+        descriptor,
+        null,
+        BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 },
+    )
 
     /**
      * Writes the poster as JPEG straight into [output]. Opaque output lets JPEG replace the slow
-     * lossless PNG pass; returns false when Apple's PNG cannot be decoded. [backdrop] is Apple's
-     * story background image; null or undecodable falls back to a flat colour.
+     * lossless PNG pass; returns false when Apple's PNG cannot be decoded. The footer is drawn
+     * only when [withQr] and a QR code can be built from [songUrl].
      */
     fun compose(
         source: File,
-        backdrop: File?,
+        background: Background,
         songUrl: String?,
+        withQr: Boolean,
         title: String,
         subtitle: String,
         output: OutputStream,
     ): Boolean {
-        val card = decode(source) ?: return false
-        val qr = songUrl?.takeIf { it.isNotBlank() }?.let { runCatching { qrBitmap(it) }.getOrNull() }
-        val backdropBitmap = backdrop?.let { runCatching { decode(it) }.getOrNull() }
-        val spec = layout(card.width, card.height, withQr = qr != null)
+        val backdrop = (background as? Background.Image)?.bitmap
+        val card = decode(source) ?: run {
+            backdrop?.recycle()
+            return false
+        }
+        val qr = songUrl?.takeIf { withQr && it.isNotBlank() }
+            ?.let { runCatching { qrBitmap(it) }.getOrNull() }
+        val spec = AppleLyricsSharePoster.layout(card.width, card.height, withQr = qr != null)
         val poster = Bitmap.createBitmap(spec.width, spec.height, Bitmap.Config.ARGB_8888)
         try {
-            val (base, baseForeground) = palette(averageOpaqueColor(card))
+            // The flat colour is also the opaque base under an image, so JPEG never sees alpha.
+            val base = when (background) {
+                is Background.Flat -> background.color or OPAQUE
+                is Background.CoverColor ->
+                    AppleLyricsSharePoster.coverColorBackground(coverColor(card, background.storyBackground))
+                is Background.Image -> OPAQUE
+            }
             val canvas = Canvas(poster)
-            // The flat colour is also the opaque base under the backdrop, so JPEG never sees alpha.
             canvas.drawColor(base)
-            var foreground = baseForeground
-            if (backdropBitmap != null) {
-                drawBackdrop(canvas, backdropBitmap, spec)
+            var foreground = AppleLyricsSharePoster.foregroundFor(base)
+            if (backdrop != null) {
+                drawBackdrop(canvas, backdrop, spec)
                 if (qr != null) {
-                    foreground = foregroundFor(
-                        averageColor(poster, spec.textLeft, spec.qrTop, spec.textRight, spec.qrTop + spec.qrTile),
+                    val area = AppleLyricsSharePoster.footerTextSampleArea(spec)
+                    foreground = AppleLyricsSharePoster.foregroundFor(
+                        averageColor(poster, area.left, area.top, area.right, area.bottom),
                     )
                 }
             }
@@ -160,12 +124,11 @@ internal object AppleLyricsShareCardComposer {
             // Blur-only shadow (no solid fill), so Apple's transparent card corners stay clean
             // over any backdrop; the rounded rect approximates the card outline.
             val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = SHADOW_COLOR
+                color = AppleLyricsSharePoster.SHADOW_COLOR
                 maskFilter = BlurMaskFilter(spec.shadowRadius.coerceAtLeast(1f), BlurMaskFilter.Blur.NORMAL)
             }
             val shadowRect = RectF(cardRect).apply { offset(0f, spec.shadowRadius / 3f) }
-            val cornerRadius = card.width * 0.035f
-            canvas.drawRoundRect(shadowRect, cornerRadius, cornerRadius, shadowPaint)
+            canvas.drawRoundRect(shadowRect, spec.cardCornerRadius, spec.cardCornerRadius, shadowPaint)
             canvas.drawBitmap(card, spec.cardLeft.toFloat(), spec.cardTop.toFloat(), null)
 
             if (qr != null) drawFooter(canvas, spec, qr, foreground, title, subtitle)
@@ -173,18 +136,13 @@ internal object AppleLyricsShareCardComposer {
         } finally {
             card.recycle()
             qr?.recycle()
-            backdropBitmap?.recycle()
+            backdrop?.recycle()
             poster.recycle()
         }
     }
 
-    private fun decode(file: File): Bitmap? = BitmapFactory.decodeFile(
-        file.absolutePath,
-        BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 },
-    )
-
-    private fun drawBackdrop(canvas: Canvas, backdrop: Bitmap, spec: Layout) {
-        val crop = coverCrop(backdrop.width, backdrop.height, spec.width, spec.height)
+    private fun drawBackdrop(canvas: Canvas, backdrop: Bitmap, spec: AppleLyricsSharePoster.Layout) {
+        val crop = AppleLyricsSharePoster.coverCrop(backdrop.width, backdrop.height, spec.width, spec.height)
         canvas.drawBitmap(
             backdrop,
             Rect(crop.left, crop.top, crop.right, crop.bottom),
@@ -218,7 +176,7 @@ internal object AppleLyricsShareCardComposer {
 
     private fun drawFooter(
         canvas: Canvas,
-        spec: Layout,
+        spec: AppleLyricsSharePoster.Layout,
         qr: Bitmap,
         foreground: Int,
         title: String,
@@ -250,7 +208,7 @@ internal object AppleLyricsShareCardComposer {
         }
         val subtitlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
             color = foreground
-            alpha = 170
+            alpha = AppleLyricsSharePoster.SUBTITLE_ALPHA
             textSize = spec.subtitleSize
         }
         val titleText = TextUtils.ellipsize(title, titlePaint, available, TextUtils.TruncateAt.END)
@@ -296,6 +254,55 @@ internal object AppleLyricsShareCardComposer {
         return Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
     }
 
+    /**
+     * Dominant artwork colour by the same extractor as the core's island and media-card cover
+     * colours. Falls back to Apple's story background, then to the card's opaque average.
+     */
+    private fun coverColor(card: Bitmap, storyBackground: File?): Int {
+        artworkDominantColor(card)?.let { return it }
+        storyBackground?.let { file ->
+            runCatching { decode(file) }.getOrNull()?.let { bitmap ->
+                try {
+                    dominantColor(bitmap)?.let {
+                        ProviderLogger.diagnostic("Apple Music 歌词图片封面色: source=story_background")
+                        return it
+                    }
+                } finally {
+                    bitmap.recycle()
+                }
+            }
+        }
+        ProviderLogger.diagnostic("Apple Music 歌词图片封面色: source=card_average")
+        return averageOpaqueColor(card)
+    }
+
+    private fun artworkDominantColor(card: Bitmap): Int? {
+        val width = card.width
+        val height = card.height
+        val pixels = IntArray(width * height)
+        card.getPixels(pixels, 0, width, 0, 0, width, height)
+        val box = AppleLyricsShareArtworkLocator.locate(width, height) { x, y ->
+            pixels[y * width + x] ushr 24
+        } ?: return null
+        val artwork = Bitmap.createBitmap(card, box.left, box.top, box.right - box.left, box.bottom - box.top)
+        return try {
+            dominantColor(artwork)?.also {
+                ProviderLogger.diagnostic(
+                    "Apple Music 歌词图片封面色: source=artwork box=${box.left},${box.top}," +
+                        "${box.right},${box.bottom} card=${width}x$height",
+                )
+            }
+        } finally {
+            if (artwork !== card) artwork.recycle()
+        }
+    }
+
+    private fun dominantColor(bitmap: Bitmap): Int? = runCatching {
+        ColorExtractor.extractThemePalette(bitmap, 1).rawColors.firstOrNull()
+    }.onFailure {
+        ProviderLogger.error("Apple Music 歌词图片封面取色失败", it)
+    }.getOrNull()
+
     private fun averageOpaqueColor(card: Bitmap): Int {
         val sample = Bitmap.createScaledBitmap(card, SAMPLE_SIZE, SAMPLE_SIZE, true)
         val pixels = IntArray(SAMPLE_SIZE * SAMPLE_SIZE)
@@ -316,37 +323,7 @@ internal object AppleLyricsShareCardComposer {
         return Color.rgb((r / count).toInt(), (g / count).toInt(), (b / count).toInt())
     }
 
-    // Plain bit math (no android.graphics.Color) so palette() runs in JVM unit tests.
-    private fun channel(color: Int, shift: Int) = (color shr shift) and 0xFF
-
-    private fun rgb(r: Int, g: Int, b: Int): Int =
-        (0xFF shl 24) or (r.coerceIn(0, 255) shl 16) or (g.coerceIn(0, 255) shl 8) or b.coerceIn(0, 255)
-
-    private fun blend(from: Int, to: Int, ratio: Float): Int {
-        val keep = 1f - ratio
-        return rgb(
-            (channel(from, 16) * keep + channel(to, 16) * ratio).roundToInt(),
-            (channel(from, 8) * keep + channel(to, 8) * ratio).roundToInt(),
-            (channel(from, 0) * keep + channel(to, 0) * ratio).roundToInt(),
-        )
-    }
-
-    internal fun luminance(color: Int): Float =
-        (0.2126f * channel(color, 16) + 0.7152f * channel(color, 8) + 0.0722f * channel(color, 0)) / 255f
-
-    /** WCAG relative luminance (linearised sRGB), 0 = black, 1 = white. */
-    private fun relativeLuminance(color: Int): Double {
-        fun linear(shift: Int): Double {
-            val value = channel(color, shift) / 255.0
-            return if (value <= 0.03928) value / 12.92 else Math.pow((value + 0.055) / 1.055, 2.4)
-        }
-        return 0.2126 * linear(16) + 0.7152 * linear(8) + 0.0722 * linear(0)
-    }
-
-    private const val SAMPLE_SIZE = 12
+    private const val SAMPLE_SIZE = AppleLyricsSharePoster.SAMPLE_GRID
     private const val JPEG_QUALITY = 95
-    private const val BLACK = 0xFF000000.toInt()
-    private const val WHITE = 0xFFFFFFFF.toInt()
-    private const val DARK_TEXT = 0xFF1C1C1E.toInt()
-    private const val SHADOW_COLOR = 0x55000000
+    private const val OPAQUE = 0xFF000000.toInt()
 }

@@ -28,6 +28,7 @@ import com.juren233.hle.providers.applemusic.xposed.AppleMusicRuntimeMember
 import com.juren233.hle.providers.applemusic.xposed.AppleProviderEnvironment
 import com.juren233.hle.providers.applemusic.xposed.AppleMusicProviderRuntime
 import com.juren233.hle.providers.applemusic.xposed.ProviderLogger
+import com.juren233.hyperlyricsenhanced.contract.AppleLyricsSharePoster
 import com.juren233.hyperlyricsenhanced.contract.AppleMusicPreferenceKeys
 import java.io.File
 import java.io.InputStream
@@ -308,12 +309,18 @@ internal class AppleLyricsShareExportHooks(
             )
             if (decision.compose && current != null && file != null) {
                 hit("rendered_image")
-                val backdrop = renderedFile(call.args.getOrNull(1))
+                val storyBackground = renderedFile(call.args.getOrNull(1))
                 current.saved = when (current.mode) {
-                    Mode.SAVE -> exportComposed(current, file, backdrop)
+                    Mode.SAVE -> exportComposed(current, file, storyBackground)
                     Mode.SHARE -> publishShare(current) { output ->
                         AppleLyricsShareCardComposer.compose(
-                            file, backdrop, current.songUrl, qrTitle(), qrSubtitle(), output,
+                            source = file,
+                            background = background(storyBackground),
+                            songUrl = current.songUrl,
+                            withQr = qrCodeEnabled(),
+                            title = qrTitle(),
+                            subtitle = qrSubtitle(),
+                            output = output,
                         ) || run { file.inputStream().use { it.copyTo(output) }; true }
                     }
                 }
@@ -391,13 +398,17 @@ internal class AppleLyricsShareExportHooks(
     }
 
     /** Composes straight into the MediaStore stream: one decode, one encode, no temp file. */
-    private fun exportComposed(current: Session, source: File, backdrop: File?): Boolean {
+    private fun exportComposed(current: Session, source: File, storyBackground: File?): Boolean {
         val startedAt = SystemClock.elapsedRealtime()
+        var backgroundKind = ""
         val saved = writeToGallery(current, "jpg", "image/jpeg") { output ->
+            val background = background(storyBackground)
+            backgroundKind = background.label
             AppleLyricsShareCardComposer.compose(
                 source = source,
-                backdrop = backdrop,
+                background = background,
                 songUrl = current.songUrl,
+                withQr = qrCodeEnabled(),
                 title = qrTitle(),
                 subtitle = qrSubtitle(),
                 output = output,
@@ -405,10 +416,55 @@ internal class AppleLyricsShareExportHooks(
         } ?: return exportRaw(current) { source.inputStream() }
         ProviderLogger.diagnostic(
             "Apple Music 歌词图片已生成: ${SystemClock.elapsedRealtime() - startedAt}ms, " +
-                "backdrop=${backdrop != null}",
+                "background=$backgroundKind",
         )
         return saved
     }
+
+    /**
+     * Background chosen in the core settings. The custom image falls back to Apple's story
+     * background when it is missing or unreadable (no image picked yet, or a core without
+     * Remote File access); Apple's story background falls back to the cover colour.
+     */
+    private fun background(storyBackground: File?): AppleLyricsShareCardComposer.Background {
+        val prefs = preferences()
+        val mode = prefs?.getInt(
+            AppleMusicPreferenceKeys.KEY_HOOK_APPLE_MUSIC_LYRICS_IMAGE_BACKGROUND,
+            AppleMusicPreferenceKeys.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_IMAGE_BACKGROUND,
+        ) ?: AppleMusicPreferenceKeys.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_IMAGE_BACKGROUND
+        return when (mode) {
+            AppleMusicPreferenceKeys.APPLE_MUSIC_LYRICS_IMAGE_BACKGROUND_COVER_COLOR ->
+                AppleLyricsShareCardComposer.Background.CoverColor(storyBackground)
+            AppleMusicPreferenceKeys.APPLE_MUSIC_LYRICS_IMAGE_BACKGROUND_CUSTOM_COLOR ->
+                AppleLyricsShareCardComposer.Background.Flat(
+                    prefs?.getInt(
+                        AppleMusicPreferenceKeys.KEY_HOOK_APPLE_MUSIC_LYRICS_IMAGE_BACKGROUND_COLOR,
+                        AppleMusicPreferenceKeys.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_IMAGE_BACKGROUND_COLOR,
+                    ) ?: AppleMusicPreferenceKeys.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_IMAGE_BACKGROUND_COLOR,
+                )
+            AppleMusicPreferenceKeys.APPLE_MUSIC_LYRICS_IMAGE_BACKGROUND_CUSTOM_IMAGE ->
+                customImageBackground() ?: storyImageBackground(storyBackground)
+            else -> storyImageBackground(storyBackground)
+        }
+    }
+
+    private fun storyImageBackground(file: File?): AppleLyricsShareCardComposer.Background =
+        file?.let { runCatching { AppleLyricsShareCardComposer.decode(it) }.getOrNull() }
+            ?.let { AppleLyricsShareCardComposer.Background.Image(it, "cover_blur") }
+            ?: AppleLyricsShareCardComposer.Background.CoverColor(null)
+
+    /** runCatching also covers an older core whose host predates openRemoteFile. */
+    private fun customImageBackground(): AppleLyricsShareCardComposer.Background? = runCatching {
+        runtime.host.openRemoteFile(AppleMusicPreferenceKeys.APPLE_MUSIC_LYRICS_IMAGE_BACKGROUND_FILE)
+            ?.use { AppleLyricsShareCardComposer.decode(it.fileDescriptor) }
+    }.onFailure {
+        ProviderLogger.error("Apple Music 歌词图片自定义背景读取失败", it)
+    }.getOrNull()?.let { AppleLyricsShareCardComposer.Background.Image(it, "custom_image") }
+
+    private fun qrCodeEnabled(): Boolean = preferences()?.getBoolean(
+        AppleMusicPreferenceKeys.KEY_HOOK_APPLE_MUSIC_LYRICS_IMAGE_QR_CODE,
+        AppleMusicPreferenceKeys.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_IMAGE_QR_CODE,
+    ) ?: AppleMusicPreferenceKeys.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_IMAGE_QR_CODE
 
     private fun exportRaw(current: Session, openInput: () -> InputStream?): Boolean =
         writeToGallery(current, "png", "image/png") { output ->
@@ -488,8 +544,10 @@ internal class AppleLyricsShareExportHooks(
         "已保存到相册 Pictures/$ALBUM_NAME",
         "Saved to Pictures/$ALBUM_NAME",
     )
-    private fun qrTitle() = AppleMenuText.pick("扫码收听完整歌曲", "Scan to listen")
-    private fun qrSubtitle() = AppleMenuText.pick("在 Apple Music 中打开", "Open in Apple Music")
+    private fun qrTitle() =
+        AppleMenuText.pick(AppleLyricsSharePoster.qrTitle(chinese = true), AppleLyricsSharePoster.qrTitle(chinese = false))
+    private fun qrSubtitle() =
+        AppleMenuText.pick(AppleLyricsSharePoster.qrSubtitle(chinese = true), AppleLyricsSharePoster.qrSubtitle(chinese = false))
 
     private companion object {
         const val SHARE_FILE_PREFIX = "hle-lyrics-share-"

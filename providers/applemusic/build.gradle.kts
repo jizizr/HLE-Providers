@@ -39,6 +39,13 @@ android {
 
 dependencies {
     implementation("com.google.zxing:core:3.5.3")
+    // ColorExtractor (shared with the core) needs androidx ColorUtils, which the release core
+    // obfuscates; the Pack carries its own copy (R8 moves it under the Pack's package). Only the
+    // androidx.core artifact itself: its dependencies (lifecycle, startup, profileinstaller...)
+    // are not needed and Kotlin comes from the core. core-ktx is compile-only for the inline
+    // Bitmap.scale extension.
+    implementation("androidx.core:core:1.17.0") { isTransitive = false }
+    compileOnly("androidx.core:core-ktx:1.17.0") { isTransitive = false }
     compileOnly("io.github.proify.lyricon:provider:0.1.70")
     compileOnly("org.jetbrains.kotlin:kotlin-stdlib:2.3.21")
     compileOnly("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
