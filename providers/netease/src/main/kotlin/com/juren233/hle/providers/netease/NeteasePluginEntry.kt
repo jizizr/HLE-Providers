@@ -53,6 +53,8 @@ import javax.crypto.spec.SecretKeySpec
 object NeteasePluginEntry : OfficialProviderPlugin {
     private const val TAG = "HLEProvider/Netease"
     private const val PROVIDER_PACKAGE = "com.juren233.hyperlyricsenhanced.provider.netease"
+    /** 与核心仓库 LyricMetadataKeys.LYRICS_UNAVAILABLE 取值一致。 */
+    private const val LYRICS_UNAVAILABLE_METADATA_KEY = "hleLyricsUnavailable"
 
     @Volatile
     private var runtime: NeteaseRuntime? = null
@@ -399,8 +401,14 @@ object NeteasePluginEntry : OfficialProviderPlugin {
                                 "translated=${payload.translated?.lines()?.size ?: 0}",
                         )
                         if (isCurrent) publishSelected(track)
+                        // 接口已答复且没有可用歌词（含纯音乐）：本 Provider 没有重试，视为确认缺失。
+                        if (isCurrent && !usable) publishUnavailable(track)
                     }
-                    .onFailure { error -> Log.w(TAG, "网易云歌词下载失败: id=$id", error) }
+                    .onFailure { error ->
+                        Log.w(TAG, "网易云歌词下载失败: id=$id", error)
+                        // 网络失败同样没有重试，结果即最终。
+                        if (currentId == id) publishUnavailable(track)
+                    }
             }
         }
 
@@ -827,6 +835,18 @@ object NeteasePluginEntry : OfficialProviderPlugin {
             name = track.title
             artist = track.artist
             duration = track.duration
+        }
+
+        /** 取词彻底结束且没有任何歌词时，在占位歌曲上打「歌词确认缺失」标记；已有歌词（含 App 自带）则不发。 */
+        @Synchronized
+        private fun publishUnavailable(track: TrackMetadata) {
+            if (currentId != track.id) return
+            if (lyricSelection.select(track.id) != null) return
+            publish(placeholder(track).apply {
+                metadata = io.github.proify.lyricon.lyric.model.LyricMetadata(
+                    mapOf(LYRICS_UNAVAILABLE_METADATA_KEY to "true"),
+                )
+            })
         }
 
         private fun loadCachedPayload(track: TrackMetadata): NeteasePayload? {

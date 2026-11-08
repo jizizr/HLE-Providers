@@ -399,6 +399,14 @@ internal fun AppleMissingLyricsHooks.onNativeLyricsState(songId: String?, hasLin
             ProviderLogger.debug(
                 "Apple Music 原生歌词请求完成: id=$contentSongId, result=empty"
             )
+            // 原生结果为空且没有三方补充内容：上报歌词确认缺失，核心再结合自己的在线兜底判定。
+            if (!store.hasContent(contentSongId)) {
+                mainHandler.post {
+                    if (!PlaybackManager.republishAsLyricsUnavailable(contentSongId) && songId != contentSongId) {
+                        PlaybackManager.republishAsLyricsUnavailable(songId)
+                    }
+                }
+            }
             maybeActivateSupplement(contentSongId, trigger = "native_empty_result")
         } else if (AppleProviderEnvironment.diagnosticsEnabled) {
             ProviderLogger.debug(

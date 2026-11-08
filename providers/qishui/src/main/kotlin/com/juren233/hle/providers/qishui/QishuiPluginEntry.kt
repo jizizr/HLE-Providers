@@ -31,6 +31,8 @@ import java.util.concurrent.Executors
  */
 object QishuiPluginEntry : OfficialProviderSystemMediaPlugin {
     private const val TAG = "HLEProvider/Qishui"
+    /** 与核心仓库 LyricMetadataKeys.LYRICS_UNAVAILABLE 取值一致。 */
+    private const val LYRICS_UNAVAILABLE_METADATA_KEY = "hleLyricsUnavailable"
     private const val TARGET_PACKAGE = "com.luna.music"
     private const val PROVIDER_PACKAGE =
         "com.juren233.hyperlyricsenhanced.provider.qishui"
@@ -166,6 +168,8 @@ object QishuiPluginEntry : OfficialProviderSystemMediaPlugin {
 
             if (trackId == null) {
                 Log.w(TAG, "系统 MediaSession 未提供可用的汽水 track_id: mediaId=${track.mediaId}")
+                // 没有 track_id 就永远取不到歌词，结果即最终。
+                publishLyricsUnavailable(track, requestKey)
                 return
             }
             lyricCache[trackId]?.let { cached ->
@@ -192,6 +196,8 @@ object QishuiPluginEntry : OfficialProviderSystemMediaPlugin {
                         Log.w(TAG, "汽水歌词网络请求失败: trackId=$trackId", error)
                         mainHandler.post {
                             if (currentRequestKey == trackId) {
+                                // 服务端已明确答复没有歌词：结果确定，立即上报；重试节奏保持不变。
+                                if (error is QishuiNoLyricsException) publishLyricsUnavailable(track, trackId)
                                 scheduleRetry(track, trackId)
                             }
                         }
@@ -202,6 +208,9 @@ object QishuiPluginEntry : OfficialProviderSystemMediaPlugin {
         private fun scheduleRetry(track: QishuiTrackMetadata, trackId: String) {
             cancelRetry()
             val delayMs = QishuiRetryPolicy.delayMs(retryAttempt++)
+            // 连续失败达到上报次数（首次请求加第一次重试，约 15 秒）：上报歌词确认缺失；
+            // 之后仍按原节奏继续重试，晚到的歌词会覆盖该状态。
+            if (retryAttempt >= QishuiRetryPolicy.REPORT_AFTER_FAILURES) publishLyricsUnavailable(track, trackId)
             retryRunnable = Runnable {
                 retryRunnable = null
                 if (currentRequestKey == trackId && lyricCache[trackId] == null) {
@@ -234,13 +243,34 @@ object QishuiPluginEntry : OfficialProviderSystemMediaPlugin {
             lastPublishedSongKey = key
         }
 
+        /** 在占位歌曲上打「歌词确认缺失」标记；请求已切到别的曲目时不发。 */
+        private fun publishLyricsUnavailable(track: QishuiTrackMetadata, id: String) {
+            if (currentRequestKey != id) return
+            val key = "unavailable:$id"
+            if (key == lastPublishedSongKey) return
+            provider?.player?.setSong(Song().apply {
+                this.id = id
+                name = track.title
+                artist = track.artist
+                duration = track.durationMs.coerceAtLeast(0L)
+                metadata = io.github.proify.lyricon.lyric.model.LyricMetadata(
+                    mapOf(LYRICS_UNAVAILABLE_METADATA_KEY to "true"),
+                )
+            })
+            lastPublishedSongKey = key
+        }
+
         private fun publishLyrics(
             track: QishuiTrackMetadata,
             payload: QishuiLyricPayload,
         ) {
             check(Looper.myLooper() == Looper.getMainLooper())
             val lines = QishuiLyricsParser.parse(payload, track.durationMs)
-            if (lines.isEmpty()) return
+            if (lines.isEmpty()) {
+                // 接口已答复但没有可用歌词，结果即最终。
+                publishLyricsUnavailable(track, payload.trackId)
+                return
+            }
             val key = "lyrics:${payload.trackId}:${payload.content.hashCode()}:" +
                 "${payload.translations.hashCode()}:${payload.timeline.hashCode()}"
             if (key == lastPublishedSongKey) return
@@ -290,6 +320,9 @@ internal object QishuiRetryPolicy {
         120_000L,
         300_000L,
     )
+
+    /** 连续失败多少次后上报歌词确认缺失：首次请求失败，加上 [delayMs] 第一档（15 秒）的重试也失败。 */
+    const val REPORT_AFTER_FAILURES = 2
 
     fun delayMs(failureCount: Int): Long = delaysMs[
         failureCount.coerceAtLeast(0).coerceAtMost(delaysMs.lastIndex)

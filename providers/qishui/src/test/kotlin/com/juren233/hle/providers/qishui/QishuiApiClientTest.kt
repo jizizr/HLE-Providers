@@ -201,4 +201,36 @@ class QishuiApiClientTest {
           };
         </script>
         """.trimIndent()
+
+    @Test
+    fun `an unusable share page keeps a PC no lyrics answer from being definitive`() {
+        val failure = runCatching {
+            QishuiApiClient.fetch(
+                trackId = "1",
+                pcApiBody = { """{"lyric":{"content":""}}""" },
+                sharePageBody = { error("share page must not be used when it cannot be parsed") },
+            )
+        }.exceptionOrNull()
+        // The share page body is unusable here, so the result is not definitive.
+        assertFalse(failure is QishuiNoLyricsException)
+    }
+
+    @Test
+    fun `a PC answer without lyrics alone is classified as no lyrics`() {
+        val failure = runCatching {
+            QishuiApiClient.parseApiBody("1", """{"lyric":{"content":""}}""")
+        }.exceptionOrNull()
+        assertTrue(failure is QishuiNoLyricsException)
+    }
+
+    @Test
+    fun `an empty response body stays an ordinary failure`() {
+        val failure = runCatching { QishuiApiClient.parseApiBody("1", "") }.exceptionOrNull()
+        assertFalse(failure is QishuiNoLyricsException)
+    }
+
+    @Test
+    fun `reports lyrics unavailable after the first retry fails`() {
+        assertEquals(2, QishuiRetryPolicy.REPORT_AFTER_FAILURES)
+    }
 }

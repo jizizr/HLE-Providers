@@ -38,6 +38,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 object KuwoPluginEntry : OfficialProviderPlugin {
     private const val TAG = "HLEProvider/Kuwo"
+    /** 与核心仓库 LyricMetadataKeys.LYRICS_UNAVAILABLE 取值一致。 */
+    private const val LYRICS_UNAVAILABLE_METADATA_KEY = "hleLyricsUnavailable"
     private const val PROVIDER_PACKAGE =
         "com.juren233.hyperlyricsenhanced.provider.kuwo"
 
@@ -267,12 +269,18 @@ object KuwoPluginEntry : OfficialProviderPlugin {
                 .getOrNull()
             if (rid == null) {
                 Log.w(TAG, "酷我歌曲 rid 无法解析: title=${track.title}, artist=${track.artist}")
+                publishUnavailable(requestKey, track, directRid)
                 return
             }
             if (!isCurrent(requestKey)) return
 
+            var cachedHasLyrics = false
             loadCached(rid)?.let { cached ->
-                if (isCurrent(requestKey)) publish(toSong(track, rid, cached))
+                if (isCurrent(requestKey)) {
+                    val cachedSong = toSong(track, rid, cached)
+                    cachedHasLyrics = !cachedSong.lyrics.isNullOrEmpty()
+                    publish(cachedSong)
+                }
             }
 
             runCatching { KuwoApiClient.fetchLyrics(rid) }
@@ -281,6 +289,8 @@ object KuwoPluginEntry : OfficialProviderPlugin {
                     if (!isCurrent(requestKey)) return@onSuccess
                     val song = toSong(track, rid, payload)
                     publish(song)
+                    // 接口已答复但解析不出歌词：本 Provider 没有重试，结果即最终。
+                    if (song.lyrics.isNullOrEmpty()) publishUnavailable(requestKey, track, directRid)
                     if (BuildConfig.DEBUG) {
                         val lines = song.lyrics.orEmpty()
                         val wordCount = lines.sumOf { it.words.orEmpty().size }
@@ -291,7 +301,11 @@ object KuwoPluginEntry : OfficialProviderPlugin {
                         )
                     }
                 }
-                .onFailure { error -> Log.w(TAG, "酷我歌词下载失败: rid=$rid", error) }
+                .onFailure { error ->
+                    Log.w(TAG, "酷我歌词下载失败: rid=$rid", error)
+                    // 已用缓存显示出歌词时不能判为缺失。
+                    if (!cachedHasLyrics) publishUnavailable(requestKey, track, directRid)
+                }
         }
 
         private fun startNextTrackCapture() {
@@ -462,6 +476,16 @@ object KuwoPluginEntry : OfficialProviderPlugin {
             name = track.title
             artist = track.artist
             duration = track.durationMs.coerceAtLeast(0L)
+        }
+
+        /** 在占位歌曲上打「歌词确认缺失」标记；请求已过期时不发。 */
+        private fun publishUnavailable(requestKey: String, track: KuwoTrackMetadata, directRid: Long?) {
+            if (!isCurrent(requestKey)) return
+            publish(placeholder(track, directRid, requestKey).apply {
+                metadata = io.github.proify.lyricon.lyric.model.LyricMetadata(
+                    mapOf(LYRICS_UNAVAILABLE_METADATA_KEY to "true"),
+                )
+            })
         }
 
         private fun loadCached(rid: Long): KuwoLyricsPayload? {

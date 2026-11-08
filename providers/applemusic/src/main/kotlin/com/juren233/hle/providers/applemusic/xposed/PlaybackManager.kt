@@ -334,6 +334,23 @@ object PlaybackManager {
         return setSong(markAsConfirmedAppleNativeLyrics(song, supplementRevoked = true))
     }
 
+    /**
+     * Apple 原生歌词请求已完成且结果为空：把当前曲目的占位歌曲重新发布一份带「歌词确认缺失」标记的版本，
+     * 让核心知道本 Provider 这一侧已经没有歌词。当前曲目已有歌词（含三方补充）或已带标记时不发。
+     */
+    @Synchronized
+    internal fun republishAsLyricsUnavailable(songId: String): Boolean {
+        val song = lastSong?.takeIf { it.id == songId } ?: return false
+        if (!song.lyrics.isNullOrEmpty()) return false
+        if (song.metadata?.getString(LyricMetadataKeys.LYRICS_UNAVAILABLE).toBoolean()) return false
+        ProviderLogger.info("Apple Music 原生歌词为空，上报歌词确认缺失: id=$songId")
+        val metadataEntries = buildList<Pair<String, String?>> {
+            addAll(song.metadata.orEmpty().entries.map { it.key to it.value })
+            add(LyricMetadataKeys.LYRICS_UNAVAILABLE to "true")
+        }
+        return setSong(song.copy(metadata = lyricMetadataOf(*metadataEntries.toTypedArray())))
+    }
+
     internal fun mergeCatalogMetadata(currentSong: Song?, resolvedSong: Song): Song {
         val currentSameSong = currentSong?.takeIf { it.id == resolvedSong.id }
         val currentLyrics = currentSameSong
