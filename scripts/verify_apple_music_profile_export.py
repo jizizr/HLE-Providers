@@ -552,6 +552,9 @@ def verify_profile(ctx, profile):
         item = click['parameterTypeNames'][2]
         method(item, click['runtimeMemberNames']['LYRICS_SHARE_ITEM_ID_METHOD'], [], 'java.lang.String', False)
         method(item, click['runtimeMemberNames']['LYRICS_SHARE_ITEM_URL_METHOD'], [], 'java.lang.String', False)
+        method(item, click['runtimeMemberNames']['LYRICS_SHARE_ITEM_TITLE_METHOD'], [], 'java.lang.String', False)
+        playback = click['runtimeMemberNames']['LYRICS_SHARE_ITEM_PLAYBACK_CLASS']
+        method(playback, click['runtimeMemberNames']['LYRICS_SHARE_ITEM_ARTIST_METHOD'], [], 'java.lang.String', False)
 
         progress = one('LYRICS_SHARE_PROGRESS_CREATE')
         progress_cls = ctx.find_class(progress['className'])

@@ -48,7 +48,7 @@ import java.util.concurrent.atomic.AtomicReference
  * song QR code, then answer i1.apply with an empty holder so the progress dialog closes without
  * launching the platform Intent it built (Snapchat-shaped even for our injected destinations).
  *
- * - Save writes the poster to Pictures/HyperLyrics.
+ * - Save writes the poster to Pictures/HyperLyrics_Enhanced as "title-artist-time".
  * - Share never touches the gallery and opens the chooser at the tap. Apple keeps rendering in the
  *   background; reads of the share file through Apple's own FileProvider wait until the poster is
  *   published, so the chooser preview and the receiving app always see the finished image.
@@ -62,6 +62,8 @@ internal class AppleLyricsShareExportHooks(
 
     private class Session(val mode: Mode, val startedAt: Long) {
         @Volatile var songUrl: String? = null
+        @Volatile var songTitle: String? = null
+        @Volatile var songArtist: String? = null
         @Volatile var progressFragment: Any? = null
         @Volatile var saved = false
         /** Share mode only: where the poster will appear and the gate that releases readers. */
@@ -79,6 +81,8 @@ internal class AppleLyricsShareExportHooks(
         val click: Method,
         val itemIdMethod: String,
         val itemUrlMethod: String,
+        val itemTitleMethod: String,
+        val itemArtistMethod: String,
         val progressCreate: Method,
         val progressCreateView: Method,
         val progressItemKey: String,
@@ -181,6 +185,8 @@ internal class AppleLyricsShareExportHooks(
             click = click.method,
             itemIdMethod = click.target.runtimeMemberName(AppleMusicRuntimeMember.LYRICS_SHARE_ITEM_ID_METHOD),
             itemUrlMethod = click.target.runtimeMemberName(AppleMusicRuntimeMember.LYRICS_SHARE_ITEM_URL_METHOD),
+            itemTitleMethod = click.target.runtimeMemberName(AppleMusicRuntimeMember.LYRICS_SHARE_ITEM_TITLE_METHOD),
+            itemArtistMethod = click.target.runtimeMemberName(AppleMusicRuntimeMember.LYRICS_SHARE_ITEM_ARTIST_METHOD),
             progressCreate = progress.method,
             progressCreateView = method(AppleMusicHookPoint.LYRICS_SHARE_PROGRESS_CREATE_VIEW).method,
             progressItemKey = progress.method.declaringClass.name + progress.target.runtimeMemberName(
@@ -279,9 +285,11 @@ internal class AppleLyricsShareExportHooks(
             current.progressFragment = fragment
             val arguments = invoke(fragment, "getArguments") as? Bundle
             @Suppress("DEPRECATION")
-            val itemUrl = arguments?.getSerializable(targets.progressItemKey)
-                ?.let { invoke(it, targets.itemUrlMethod) as? String }
+            val item = arguments?.getSerializable(targets.progressItemKey)
+            val itemUrl = item?.let { invoke(it, targets.itemUrlMethod) as? String }
             current.songUrl = itemUrl?.takeIf { it.isNotBlank() } ?: arguments?.getString(targets.progressUrlKey)
+            current.songTitle = item?.let { invoke(it, targets.itemTitleMethod) as? String }
+            current.songArtist = item?.let { invoke(it, targets.itemArtistMethod) as? String }
         })
 
         runtime.hookRegistrar.installHook(targets.progressCreateView, after = { _, result ->
@@ -480,7 +488,10 @@ internal class AppleLyricsShareExportHooks(
     ): Boolean? {
         val resolver = runtime.application.contentResolver
         val values = ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, "Apple Music Lyrics-${System.currentTimeMillis()}.$extension")
+            put(
+                MediaStore.Images.Media.DISPLAY_NAME,
+                AppleLyricsShareFileName.build(current.songTitle, current.songArtist, System.currentTimeMillis(), extension),
+            )
             put(MediaStore.Images.Media.MIME_TYPE, mimeType)
             put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/$ALBUM_NAME")
             put(MediaStore.Images.Media.IS_PENDING, 1)
@@ -553,7 +564,7 @@ internal class AppleLyricsShareExportHooks(
         const val SHARE_FILE_PREFIX = "hle-lyrics-share-"
         const val EXPORT_REFERRER = "export=image"
         const val MODULE_PACKAGE = "com.juren233.hyperlyricsenhanced"
-        const val ALBUM_NAME = "HyperLyrics"
+        const val ALBUM_NAME = "HyperLyrics_Enhanced"
         const val INSTAGRAM_PACKAGE = "com.instagram.android"
         const val SESSION_TIMEOUT_MS = 30_000L
         const val SHARE_READ_WAIT_MS = 15_000L

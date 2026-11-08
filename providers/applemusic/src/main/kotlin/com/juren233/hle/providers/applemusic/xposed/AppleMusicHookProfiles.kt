@@ -453,6 +453,9 @@ internal enum class AppleMusicRuntimeMember {
     LYRICS_SHARE_DESTINATION_ITEM_CONSTRUCTOR,
     LYRICS_SHARE_ITEM_ID_METHOD,
     LYRICS_SHARE_ITEM_URL_METHOD,
+    LYRICS_SHARE_ITEM_TITLE_METHOD,
+    LYRICS_SHARE_ITEM_PLAYBACK_CLASS,
+    LYRICS_SHARE_ITEM_ARTIST_METHOD,
     LYRICS_SHARE_PROGRESS_ITEM_KEY_SUFFIX,
     LYRICS_SHARE_PROGRESS_LYRICS_URL_KEY_SUFFIX,
     LYRICS_SHARE_RESULT_CLASS,
@@ -2696,6 +2699,12 @@ internal object AppleMusicHookProfiles {
                     runtimeMemberNames = mapOf(
                         AppleMusicRuntimeMember.LYRICS_SHARE_ITEM_ID_METHOD to "getId",
                         AppleMusicRuntimeMember.LYRICS_SHARE_ITEM_URL_METHOD to "getUrl",
+                        AppleMusicRuntimeMember.LYRICS_SHARE_ITEM_TITLE_METHOD to "getTitle",
+                        // The lyric sheet only loads lyrics for a PlaybackItem (it checks instance-of
+                        // before PlayerLyricsViewModel.loadLyrics); PlaybackItem declares getArtistName.
+                        AppleMusicRuntimeMember.LYRICS_SHARE_ITEM_PLAYBACK_CLASS to
+                            "com.apple.android.music.model.PlaybackItem",
+                        AppleMusicRuntimeMember.LYRICS_SHARE_ITEM_ARTIST_METHOD to "getArtistName",
                     ),
                 ),
             ),

@@ -49,6 +49,12 @@ class AppleMusic7001614ProfileRegressionTest {
         val click = target(AppleMusicHookPoint.LYRICS_SHARE_DESTINATION_CLICK)
         assertEquals("z", click.methodName)
         assertEquals(listOf("int", "android.view.View", "com.apple.android.music.model.CollectionItemView"), click.parameterTypeNames)
+        assertEquals("getTitle", click.runtimeMemberName(AppleMusicRuntimeMember.LYRICS_SHARE_ITEM_TITLE_METHOD))
+        assertEquals(
+            "com.apple.android.music.model.PlaybackItem",
+            click.runtimeMemberName(AppleMusicRuntimeMember.LYRICS_SHARE_ITEM_PLAYBACK_CLASS),
+        )
+        assertEquals("getArtistName", click.runtimeMemberName(AppleMusicRuntimeMember.LYRICS_SHARE_ITEM_ARTIST_METHOD))
         assertEquals(
             "d",
             target(AppleMusicHookPoint.LYRICS_SHARE_FILE_PROVIDER_OPEN)
